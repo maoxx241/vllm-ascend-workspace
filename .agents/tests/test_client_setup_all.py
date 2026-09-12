@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import plistlib
 import sys
+import tomllib
 
 import pytest
 
@@ -135,6 +136,33 @@ def test_all_skips_missing_clients_and_preserves_unsupported_existing_kimi(local
     assert record["clients"]["kimi"]["native_worktree"]["status"] == "unavailable"
 
 
+@pytest.mark.parametrize("supported", [False, True])
+def test_all_preserves_verified_extensions_before_applying(local_setup, monkeypatch, capsys, supported):
+    project, _ = local_setup
+    monkeypatch.setattr(inventory, "installed_clients", lambda: installations("grok", "kimi"))
+    grok = project.parent / ".grok/config.toml"
+    kimi = project.parent / "custom-kimi/config.toml"
+    for path, text in ((grok, "[cli]\nauto_update = true\n"), (kimi, "[upgrade]\nauto_install = true\n")):
+        path.parent.mkdir(parents=True)
+        path.write_text(text)
+    probes = []
+
+    def grok_capability(executable, directory):
+        assert tomllib.loads(grok.read_text())["cli"]["auto_update"] is True
+        probes.append((executable, directory))
+        return {"supported": supported}
+
+    monkeypatch.setattr(modes, "grok_native_defaults", grok_capability)
+    monkeypatch.setattr(modes, "kimi_session_setup_capability", lambda exe: {"supported": supported})
+    assert setup.main(["--client", "all", "--project", str(project), "--kimi-config", str(kimi), "--apply"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert probes == [("/tools/grok", project)]
+    assert result["clients"]["grok"]["capability"]["supported"] is supported
+    assert tomllib.loads(grok.read_text())["cli"]["auto_update"] is not supported
+    assert tomllib.loads(kimi.read_text())["upgrade"]["auto_install"] is not supported
+    assert not (project.parent / ".kimi-code/config.toml").exists()
+
+
 def test_native_setting_pending_is_reported_without_failing_initialization(local_setup, monkeypatch, capsys):
     project, _ = local_setup
     monkeypatch.setattr(inventory, "installed_clients", lambda: installations("codex", "cursor"))
@@ -182,7 +210,8 @@ def test_all_keeps_completed_files_backups_and_continues_after_a_write_failure(l
 def test_single_client_entry_does_not_discover_or_set_global_native_preferences(local_setup, monkeypatch, capsys):
     project, calls = local_setup
     monkeypatch.setattr(inventory, "installed_clients", lambda: pytest.fail("per-worktree setup scanned clients"))
-    monkeypatch.setattr(modes, "add_native_mode", lambda *args: pytest.fail("per-worktree setup changed user preferences"))
+    monkeypatch.setattr(modes, "add_native_mode", lambda *args, **kwargs: pytest.fail("per-worktree setup changed user preferences"))
+    monkeypatch.setattr(modes, "grok_native_defaults", lambda *args: pytest.fail("per-worktree setup probed a personal binary"))
     assert setup.main(["--client", "codex", "--project", str(project), "--apply"]) == 0
     capsys.readouterr()
     assert not calls[0][1]["codex_global_hooks"]

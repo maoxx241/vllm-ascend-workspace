@@ -47,6 +47,12 @@ Grok 的原生补丁让普通新会话也消费自动 worktree 偏好，恢复�
 /fork 的目录判断仍有客户端缺陷；已安装的个人修复版基于公开源码 1.0.24，
 保留官方二进制供回退。补丁来源与实测范围见验收记录。
 
+全客户端初始化保护已确认的个人客户端扩展：Grok 的安装记录与实际二进制
+匹配且已有启动/恢复验收时，设置原生 `[cli] auto_update = false`；Kimi 的实际
+parser 确认支持 SessionSetup 时，在所选配置文件设置 `[upgrade] auto_install = false`。
+这避免官方自动安装覆盖已验收补丁。官方版或未确认构建保留原有更新设置；
+单客户端和每会话接线不调整这些偏好。
+
 Grok 还会兼容导入 Cursor MCP，但不能消费 Cursor 的 workspaceFolder 替换。
 全客户端初始化在确认三个 VAWS Cursor 入口由本仓生成、且已有有效 Grok
 入口时，将这些重复名称加入 Grok 用户级 disabled_mcp_servers。Cursor

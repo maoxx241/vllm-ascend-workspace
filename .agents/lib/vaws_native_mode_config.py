@@ -46,7 +46,7 @@ def grok_native_defaults(executable: str | Path | None, project: Path) -> dict:
         return unavailable
 
 
-def _set_scalar(text: str, table: str, key: str, value: str) -> str:
+def _set_scalar(text: str, table: str, key: str, value: str | bool) -> str:
     """Edit a scalar in an ordinary top-level TOML table, preserving other text."""
     headers = []
     for match in re.finditer(r"(?m)^[ \t]*\[.+\][ \t]*(?:#[^\n]*)?$", text):
@@ -73,7 +73,8 @@ def _set_scalar(text: str, table: str, key: str, value: str) -> str:
 
 
 def add_native_mode(files: dict[Path, str], notes: list, client: str,
-                    project: Path, *, user_home: Path | None = None) -> None:
+                    project: Path, *, user_home: Path | None = None,
+                    capability: dict | None = None, kimi_config: Path | None = None) -> None:
     """Append planned files/notes; the existing setup owner applies and backs up.
 
     Call only for explicitly requested one-time initialization, never from a
@@ -88,13 +89,34 @@ def add_native_mode(files: dict[Path, str], notes: list, client: str,
                                 "WorktreeCreate only handles creation already requested by the client.",
                       "reference": "https://code.claude.com/docs/en/worktrees"})
         return
-    if client != "grok":
+    accepted = bool(capability and capability.get("supported") is True)
+    if client == "kimi":
+        if not accepted or kimi_config is None:
+            return
+        path = kimi_config
+        values = {"upgrade": {"auto_install": False}}
+        reason = "preserve-native-session-extension"
+        detail = ("Native automatic installation is disabled for the verified SessionSetup extension "
+                  "so an official update cannot remove its supported hook event.")
+    elif client == "grok":
+        home = (Path(user_home).expanduser() / ".grok" if user_home is not None
+                else Path(os.environ.get("GROK_HOME", str(Path.home() / ".grok"))).expanduser())
+        path = home / "config.toml"
+        values = {"cli": {"worktree_type": "git"},
+                  "hints": {"new_session_worktree_mode": "always", "fork_worktree_mode": "always"}}
+        if accepted:
+            values["cli"]["auto_update"] = False
+        reason = "native-worktree-preferences"
+        detail = ("Grok loads these preferences only from user configuration. "
+                  "They affect /new and /fork in the inspected stock client. "
+                  "Automatic bare startup also requires the native startup-default patch; "
+                  "only an installed binary receipt with matching hash and startup/resume "
+                  "acceptance can establish that capability.")
+        if accepted:
+            detail += (" Native automatic updates are disabled for this accepted personal build "
+                       "so an official release cannot overwrite its worktree patch.")
+    else:
         return
-    home = (Path(user_home).expanduser() / ".grok" if user_home is not None
-            else Path(os.environ.get("GROK_HOME", str(Path.home() / ".grok"))).expanduser())
-    path = home / "config.toml"
-    values = {"cli": {"worktree_type": "git"},
-              "hints": {"new_session_worktree_mode": "always", "fork_worktree_mode": "always"}}
     try:
         text = files[path] if path in files else path.read_text(encoding="utf-8") if path.exists() else ""
         original = tomllib.loads(text)
@@ -117,12 +139,7 @@ def add_native_mode(files: dict[Path, str], notes: list, client: str,
         files[path] = updated
     notes.append({"client": client, "path": str(path), "scope": "user",
                   "action": "planned" if updated != text else "configured",
-                  "reason": "native-worktree-preferences", "settings": values,
-                  "detail": "Grok loads these preferences only from user configuration. "
-                            "They affect /new and /fork in the inspected stock client. "
-                            "Automatic bare startup also requires the native startup-default patch; "
-                            "only an installed binary receipt with matching hash and startup/resume "
-                            "acceptance can establish that capability."})
+                  "reason": reason, "settings": values, "detail": detail})
 
 
 def _disabled_servers_text(text: str, values: list[str]) -> str:

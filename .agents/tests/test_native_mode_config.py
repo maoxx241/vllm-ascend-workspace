@@ -101,6 +101,44 @@ class NativeModeConfigTests(unittest.TestCase):
         self.assertFalse(files)
         self.assertFalse(notes)
 
+    def test_verified_extensions_disable_auto_installation_idempotently(self):
+        for client, table, key in (("grok", "cli", "auto_update"), ("kimi", "upgrade", "auto_install")):
+            for initial in (True, None):
+                with self.subTest(client=client, initial=initial):
+                    path = self.user_dir / (".grok" if client == "grok" else "custom-kimi") / "config.toml"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    before = "# keep user settings\n[" + table + "]\ncustom = 42\n"
+                    if initial is not None:
+                        before += key + " = true\n"
+                    path.write_text(before, encoding="utf-8")
+                    files, notes = {}, []
+                    options = {"user_home": self.user_dir, "capability": {"supported": True}, "kimi_config": path}
+                    add_native_mode(files, notes, client, self.project, **options)
+                    after = tomllib.loads(files[path])
+                    self.assertIs(after[table][key], False)
+                    self.assertEqual(after[table]["custom"], 42)
+                    self.assertIs(notes[-1]["settings"][table][key], False)
+                    self.assertEqual(path.read_text(), before)
+                    path.write_text(files[path], encoding="utf-8")
+                    again = {}
+                    add_native_mode(again, notes, client, self.project, **options)
+                    self.assertEqual(again, {})
+                    self.assertEqual(notes[-1]["action"], "configured")
+
+    def test_unverified_clients_preserve_automatic_update_settings(self):
+        for client, table, key in (("grok", "cli", "auto_update"), ("kimi", "upgrade", "auto_install")):
+            for capability in (None, {"supported": False}):
+                with self.subTest(client=client, capability=capability):
+                    path = self.user_dir / (".grok" if client == "grok" else "custom-kimi") / "config.toml"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    before = "[" + table + "]\n" + key + " = true\n"
+                    path.write_text(before, encoding="utf-8")
+                    files, notes = {}, []
+                    add_native_mode(files, notes, client, self.project, user_home=self.user_dir,
+                                    capability=capability, kimi_config=path)
+                    self.assertIs(tomllib.loads(files.get(path, before))[table][key], True)
+                    self.assertEqual(path.read_text(), before)
+
 
 class GrokImportDedupTests(unittest.TestCase):
     def setUp(self):

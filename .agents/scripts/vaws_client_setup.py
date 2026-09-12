@@ -929,11 +929,15 @@ def setup_installed_clients(args):
                         row["native_worktree"] = {"status": "unavailable",
                             "missing_action": "Install a Kimi client supporting SessionSetup; existing configuration was preserved."}
                         continue
+            elif client == "grok":
+                capability = grok_native_defaults(installation.get("executable"), args.project)
+                row["capability"] = capability
             plan = build_plan(client, args.project, kimi_config=args.kimi_config, task_only=args.task_only,
-                              kimi_session_setup=bool(capability and capability["supported"]),
+                              kimi_session_setup=bool(client == "kimi" and capability and capability["supported"]),
                               codex_global_hooks=client == "codex", cursor_global_mcp=client == "cursor")
             row["notes"] = plan["notes"]
-            add_native_mode(plan["files"], plan["notes"], client, args.project)
+            add_native_mode(plan["files"], plan["notes"], client, args.project,
+                            capability=capability, kimi_config=args.kimi_config or kimi_home() / "config.toml")
             if client == "grok":
                 add_grok_import_dedup(plan["files"], plan["notes"], args.project, ROOT,
                                       owned_server=owned_environment_server)
@@ -961,8 +965,6 @@ def setup_installed_clients(args):
             elif client == "grok":
                 preference = next((note for note in reversed(plan["notes"])
                                    if note.get("reason") == "native-worktree-preferences"), None)
-                capability = grok_native_defaults(installation.get("executable"), args.project)
-                row["capability"] = capability
                 native.update(scope="/new and /fork", initial_cli_start="not_verified")
                 if preference is None:
                     native.update(status="preferences_preserved", missing_action="Integrate the existing Grok user preference table once; see notes.")

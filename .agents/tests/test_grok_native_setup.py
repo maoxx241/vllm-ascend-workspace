@@ -147,7 +147,7 @@ def test_all_preview_reports_owned_crlf_hook_repair(repository, monkeypatch, cap
         "launch_argv": None, "launch_cwd": str(source)})
     monkeypatch.setattr(vaws_client_inventory, "installed_clients",
                         lambda: {"grok": {"installed": True, "executable": None, "evidence": []}})
-    monkeypatch.setattr(vaws_native_mode_config, "add_native_mode", lambda *args: None)
+    monkeypatch.setattr(vaws_native_mode_config, "add_native_mode", lambda *args, **kwargs: None)
     monkeypatch.setattr(vaws_native_mode_config, "add_grok_import_dedup", lambda *args, **kwargs: None)
     monkeypatch.setattr(vaws_native_mode_config, "grok_native_defaults", lambda *args: {"supported": False})
     assert client_setup.main(["--client", "all", "--project", str(source)]) == 0
