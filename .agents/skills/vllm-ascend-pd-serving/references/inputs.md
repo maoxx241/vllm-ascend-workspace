@@ -4,6 +4,10 @@ This is an illustrative configuration shape. Select cases and values for the
 actual task. The tool generates report metadata internally; observed output
 files are produced by the relevant execution or measurement harness.
 
+Each role parses its vLLM arguments when its managed process starts. The
+topology does not run a separate parse-only import before launch. Coordinator
+still owns group preparation, resource admission and execution cleanup.
+
 ```json
 {
   "group_id": "pd-group",

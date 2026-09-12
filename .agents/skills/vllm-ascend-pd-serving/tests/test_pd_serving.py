@@ -90,8 +90,10 @@ class PdServingTests(unittest.TestCase):
         self.assertEqual(names, ["decode", "prefill"])
         for role in topology["roles"]:
             self.assertIn('"$VAWS_PYTHON"', role["command"])
+            self.assertIn("exec \"$VAWS_PYTHON\" -m vllm.entrypoints.cli.main serve", role["command"])
             self.assertIn("--kv-transfer-config", role["command"])
             self.assertEqual(role["npu_count"], 1)
+            self.assertNotIn("preflight", role)
 
     def test_role_env_is_topology_data_not_shell_json(self) -> None:
         cfg = config()
