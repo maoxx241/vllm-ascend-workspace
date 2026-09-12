@@ -57,7 +57,7 @@ class KnowledgeFlowTests(unittest.TestCase):
                                     capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertEqual(Path(payload["env"]["VAWS_KNOWLEDGE_PROJECT_ROOTS"]), Path(temporary) / ".agents/knowledge")
+        self.assertEqual(Path(payload["env"]["VAWS_KNOWLEDGE_PROJECT_ROOTS"]), Path(temporary).resolve() / ".agents/knowledge")
         self.assertTrue(payload["lookup"]["unavailable"])
 
     def test_mcp_and_hook_roots_agree_with_nested_service_config(self):
