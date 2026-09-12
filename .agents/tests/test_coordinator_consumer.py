@@ -422,6 +422,8 @@ class ClientSetupTests(unittest.TestCase):
             self.assertFalse(self.setup.owned_workspace_interpreter(
                 f"C:/workspace-other/.vaws-local/env-links/{key}/Scripts/python.exe", "C:/workspace"))
             self.assertFalse(self.setup.owned_workspace_interpreter("C:/workspace/.venv/Scripts/python.exe", "C:/workspace"))
+            self.assertFalse(self.setup.owned_workspace_interpreter(
+                f"C:/workspace/.vaws-local/env-links/{key}/Scripts/pythonXexe", "C:/workspace"))
 
     def test_json_setup_is_idempotent_on_fixtures(self) -> None:
         first = self.setup.configuration("claude", self.project)

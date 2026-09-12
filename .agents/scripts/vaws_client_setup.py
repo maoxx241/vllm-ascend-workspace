@@ -463,7 +463,7 @@ def server_command_identity(command, checkout):
 def owned_workspace_interpreter(command, checkout):
     value = server_command_identity(command, checkout)
     prefix = hook_path_identity(ROOT).rstrip("/") + "/.vaws-local/env-links/"
-    return value.startswith(prefix) and bool(re.fullmatch(r"[0-9a-f]{64}/(?:scripts/python.exe|bin/python)", value[len(prefix):]))
+    return value.startswith(prefix) and bool(re.fullmatch(r"[0-9a-f]{64}/(?:[Ss]cripts/python\.exe|bin/python)", value[len(prefix):]))
 
 
 def owned_environment_server(existing, checkout):
