@@ -472,7 +472,14 @@ def checkout_missing_refs(entry, checkout):
     return missing
 
 
-def is_stale_scaffold_entry(existing, checkout):
+def is_stale_scaffold_entry(existing, checkout, *, desired=None):
+    # A known knowledge owner can be awaiting installation. Keep its settings
+    # while normal managed migration updates the command and generated paths.
+    if (desired is not None
+            and existing.get("args") == desired.get("args") == knowledge_server_args()
+            and owned_workspace_interpreter(existing.get("command", ""), checkout)
+            and owned_workspace_interpreter(desired.get("command", ""), checkout)):
+        return False
     return bool(checkout_missing_refs(existing, checkout))
 
 
@@ -583,7 +590,7 @@ def merge_server_entry(existing, desired, *, checkout=None):
         if "WSLENV" in desired.get("env", {}):
             merged_env = windows_interop_env(merged_env)
         return {**desired, **existing, "command": desired["command"], "env": merged_env}, "updated-managed"
-    if is_stale_scaffold_entry(existing, checkout):
+    if is_stale_scaffold_entry(existing, checkout, desired=desired):
         merged = dict(desired)
         for key, value in existing.items():
             if key not in {"command", "args", "type", "env"}:
@@ -642,7 +649,7 @@ def merge_json(path, *, hooks=None, mcp=None, notes=None, client=None, project=N
                 continue
             stale_keys = [
                 alias for alias in found_keys
-                if is_stale_scaffold_entry(servers[alias], checkout)
+                if is_stale_scaffold_entry(servers[alias], checkout, desired=desired)
             ]
             if stale_keys:
                 merged, action = merge_server_entry(
@@ -807,7 +814,7 @@ def build_plan(client, project, *, kimi_config=None, task_only=False):
                         notes.append({"path": str(path), "server": name, "action": "updated-managed",
                                       "reason": "shared-native-owner"})
                         continue
-                if any(is_stale_scaffold_entry(existing[alias], project) for alias in matching):
+                if any(is_stale_scaffold_entry(existing[alias], project, desired=entry) for alias in matching):
                     text = managed_toml_text(
                         drop_toml_server_tables(text, *aliases),
                         name,

@@ -65,7 +65,7 @@
       "responsibility": "mechanics",
       "support_role": "supported",
       "target_kind": "self",
-      "note": "configure corpus fork and background Release sync through the installed package",
+      "note": "prepare local knowledge through its native package owner; public contribution is explicit",
       "external_owner": "vaws-knowledge"
     },
     ".agents/scripts/repo_boundary_check.py": {
