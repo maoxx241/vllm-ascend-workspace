@@ -11,7 +11,7 @@ the ones that do not resolve. Known remaining hits in dated audits live
 in `.agents/policy/tracked-paths-baseline.json` so the guard can be
 honest about historical evidence while still failing on anything new.
 
-Three anti-rot properties, matching repo_boundary_check.py:
+Three properties keep exceptions from hiding new or fixed references:
 
 1. Nothing new passes. A violation absent from the baseline fails
    ``--mode enforce``.

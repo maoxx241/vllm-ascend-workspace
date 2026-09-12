@@ -1,14 +1,16 @@
 ---
 name: ascend-tensor-dump
-description: Capture and compare bounded intermediate tensor dumps on Ascend NPU to find the first stage where numbers diverge. Use when output is wrong, non-finite, or differs between two configurations and the divergence must be localized to a stage, layer, rank, or single operator, in eager or graph mode. Do not use for performance profiling, HBM attribution, debug case bookkeeping, or before a deterministic reproduction with fixed weights and token ids exists.
+description: Capture and compare bounded intermediate tensor dumps on Ascend NPU to find the first stage where numbers diverge. Use when output is wrong, non-finite, or differs between two configurations and the divergence must be localized to a stage, layer, rank, or single operator, in eager or graph mode. Do not use for performance profiling, HBM attribution, debug case bookkeeping.
 ---
 
 # Ascend tensor dump
 
-Find the first divergent stage using a bounded capture of a deterministic
-reproduction. Start with existing output evidence; add instrumentation only when
+Find the first divergent stage using a bounded capture of the reproduction. Start with existing output evidence; add instrumentation only when
 it can distinguish the current hypothesis. Inputs, sampling and topology should
-match the comparison being made.
+match the comparison being made. Compare token IDs themselves when exact input
+identity matters; equal lengths do not establish equality. For an intermittent
+failure, capture repeated matched requests and report observed variability rather
+than requiring determinism before any investigation.
 
 Use `assets/dump_probe.py` in the actual managed source worktree. Prefer summary
 statistics, then capture selected tensors at the first suspicious stage. Retain
@@ -30,7 +32,9 @@ symptom.
 
 Pass actual dump artifacts directly to the relevant comparison; report tools
 retain evidence references internally. Missing stages are missing evidence. A
-passing operator replay does not establish a whole-model fix. Remove temporary
+passing operator replay does not establish a whole-model fix. Select explicit
+tolerances for an accuracy claim; the default tensor tolerance is only a coarse
+screen. A coverage mismatch limits the comparison to paired stages. Remove temporary
 instrumentation after the investigation and rerun the affected reproduction.
 
 Use graph-debug for compile/capture/replay localization and operator-debug once

@@ -92,8 +92,14 @@ def _capture(source: Path) -> dict:
     for name in modules:
         path = source / name
         if not (path / ".git").exists():
-            raise WorkspaceCopyError(f"initialize submodule {name!r} before creating an isolated workspace")
-        children[name] = _capture(path)
+            # A normal non-recursive clone has empty, uninitialized gitlinks.
+            # Keep that state without fetching source the task does not need.
+            # Also distinguish a locally deleted directory from an empty one.
+            if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
+                raise WorkspaceCopyError(f"uninitialized submodule {name!r} contains non-Git content that cannot be copied as an empty gitlink")
+            children[name] = {"uninitialized": True, "directory": path.is_dir()}
+        else:
+            children[name] = _capture(path)
     defaults = {"core.autocrlf": "false", "core.eol": "native", "core.safecrlf": "false",
                 "core.filemode": "true", "core.ignorecase": "false", "core.symlinks": "true"}
     configuration = {key: git(source, "config", "--default", default, "--get", key).decode().strip()
@@ -146,7 +152,11 @@ def _copy_repository(source: Path, destination: Path, snapshot: dict) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
     for name, child in snapshot["modules"].items():
-        _copy_repository(source / name, destination / name, child)
+        if child.get("uninitialized"):
+            if child["directory"]:
+                (destination / name).mkdir(parents=True)
+        else:
+            _copy_repository(source / name, destination / name, child)
     # Targets, including submodules, exist before links are created. Explicit
     # Windows link types also preserve directory and dangling-directory links.
     for name, state in snapshot["files"].items():
@@ -225,7 +235,8 @@ def create_workspace(source: Path, destination: Path) -> dict:
     """Copy HEAD, staged/working content and ordinary untracked files.
 
     Ignored files are excluded. Initialized submodules receive independent Git
-    directories. Existing destinations are never replaced. A failed copy stays
+    directories; uninitialized gitlinks remain uninitialized without fetching.
+    Existing destinations are never replaced. A failed copy stays
     visible for diagnosis and is never published as ready.
     """
     source, destination = source.resolve(), destination.absolute()

@@ -58,20 +58,11 @@ class SpecLockTests(unittest.TestCase):
             self.assertEqual(info["state"], "missing")
             self.assertTrue(info["problems"])
             self.assertEqual(info["remedy"], "uv run --no-project python .agents/scripts/vaws_deps.py sync")
-            with self.assertRaises(deps.DependencyUnavailable) as ctx:
-                deps.require_package("vaws-coordinator", repo_root=Path(tmp))
-            self.assertIn("uv run --no-project python .agents/scripts/vaws_deps.py sync", str(ctx.exception))
 
     def test_status_exit_code_is_nonzero_unless_ready(self) -> None:
         self.assertEqual(deps.status_exit_code({"vaws-coordinator": "ready"}), 0)
         self.assertEqual(deps.status_exit_code({"vaws-coordinator": "off_spec"}), 1)
         self.assertEqual(deps.status_exit_code({"vaws-coordinator": "missing"}), 1)
-
-    def test_usable_states_are_ready_and_off_spec(self) -> None:
-        self.assertTrue(deps.package_usable.__doc__ or True)
-        self.assertIn("ready", deps.USABLE_STATES)
-        self.assertIn("off_spec", deps.USABLE_STATES)
-        self.assertNotIn("missing", deps.USABLE_STATES)
 
     def test_status_cli_prints_one_json_object(self) -> None:
         proc = subprocess.run(

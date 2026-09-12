@@ -58,6 +58,16 @@ def client_environment(environment=None) -> dict[str, str]:
             if key not in NATIVE_IDENTITY_ENV}
 
 
+def activated_client_environment(receipt: dict, environment=None) -> dict[str, str]:
+    """Give native shells ordinary venv activation without shell-specific code."""
+    result = dict(os.environ if environment is None else environment)
+    scripts = str(Path(receipt["python"]).parent)
+    result["PATH"] = scripts + os.pathsep + result.get("PATH", "")
+    result["VIRTUAL_ENV"] = str(receipt["root"])
+    result.pop("PYTHONHOME", None)
+    return result
+
+
 def run_client(command: list[str], workspace: Path, *, environment=None) -> int:
     environment = client_environment(environment)
     if os.name == "nt":
@@ -104,7 +114,7 @@ def main(argv=None) -> int:
         plan = vaws_client_setup.build_plan(args.client, target)
         receipt["configuration"] = vaws_client_setup.apply_plan(plan)
         print(json.dumps(receipt, ensure_ascii=False), file=sys.stderr, flush=True)
-        environment = dict(os.environ)
+        environment = activated_client_environment(native)
         provider = vaws_client_setup.launch_env(args.client, target)
         from vaws_local_owner import accessible_windows_path
         for key in ("VAWS_AGENT_SESSIONS_DIR", "VAWS_COORDINATOR_STATE_DIR"):

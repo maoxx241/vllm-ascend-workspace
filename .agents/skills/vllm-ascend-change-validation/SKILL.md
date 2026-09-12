@@ -5,7 +5,8 @@ description: Consolidate executed vLLM or vllm-ascend change validation into a r
 
 # vllm-ascend-change-validation
 
-Map an accessible diff to the minimum evidence needed for a reviewable validation conclusion.
+Assess the changed behavior and affected callers, then summarize the evidence
+needed for a reviewable validation conclusion.
 
 Use this workflow when the requested result needs experiment evidence or a
 formal validation report. A request to read or review a PR, explain a change,
@@ -16,17 +17,24 @@ Read the changed behavior and affected callers before choosing tests. Build, num
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
+uv run --no-project python .agents/skills/vllm-ascend-change-validation/scripts/change_validation.py --baseline BASE --candidate HEAD --repo-root source --evidence correctness/manifest.json performance/manifest.json
 ```
 
-Use --diff-file for an already captured diff. The report classifies affected components, derives supported coverage from actual evidence and exact code identities, and lists missing checks. Agents do not enter coverage labels or lifecycle records.
+Use `--diff-file` for an already captured diff. The report summarizes changed
+files and supplied manifests, checks artifact availability and reuses existing
+comparability evidence to identify observed source revisions. It creates no test
+plan from path keywords and no fallback NPU smoke requirement for unclassified
+changes.
+
+Individual run outcomes and source matches remain visible. The aggregate stays
+inconclusive about complete change validation: the Agent decides whether the
+evidence covers the actual changed behavior. Missing or unrelated evidence is
+reported as a limitation, without discarding usable artifacts or requiring a
+new parent task association.
 
 Execute missing checks with the owning validation, benchmark, profiling or debug skill; this report does not run an NPU experiment.
 
 Read the relevant detail only when needed:
-
-- [behavior](references/behavior.md)

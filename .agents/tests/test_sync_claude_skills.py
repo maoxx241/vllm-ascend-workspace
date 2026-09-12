@@ -10,8 +10,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,46 +47,6 @@ def load_module(path: Path, name: str):
 
 sync = load_module(SCRIPT, "_sync_claude_skills_test")
 catalog = load_module(CATALOG_SCRIPT, "_skill_catalog_for_sync_test")
-
-
-def _unquote_yaml_scalar(raw: str) -> object:
-    if raw in {"true", "True"}:
-        return True
-    if raw in {"false", "False"}:
-        return False
-    if raw in {"null", "Null", "~"}:
-        return None
-    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
-        return raw[1:-1]
-    return raw
-
-
-def parse_yaml_mapping(text: str) -> dict[str, object]:
-    """Parse a nested block mapping. Used when PyYAML is not a package dependency."""
-    root: dict[str, object] = {}
-    stack: list[tuple[int, dict[str, object]]] = [(-1, root)]
-    for raw_line in text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        if ":" not in stripped:
-            raise ValueError(f"invalid YAML mapping line: {raw_line!r}")
-        key, remainder = stripped.split(":", 1)
-        key = key.strip()
-        if not key:
-            raise ValueError(f"invalid YAML key: {raw_line!r}")
-        value_text = remainder.strip()
-        while indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1]
-        if value_text == "":
-            nested: dict[str, object] = {}
-            parent[key] = nested
-            stack.append((indent, nested))
-        else:
-            parent[key] = _unquote_yaml_scalar(value_text)
-    return root
 
 
 def frontmatter_yaml(text: str) -> str:
@@ -164,19 +126,29 @@ class ModelScopeTraeProjectionTests(unittest.TestCase):
         sync.TRAE_SKILLS = ROOT / ".trae" / "skills"
         self._tmp.cleanup()
 
-    def test_mapping_is_the_six_modelscope_outputs(self) -> None:
+    def test_shim_cleanup_only_removes_unextended_generated_shims(self) -> None:
+        for name in ("removed-skill", "extended-skill", "foreign-skill"):
+            directory = self.claude_skills / name
+            directory.mkdir()
+            body = (
+                f"<!-- Generated from .agents/skills/{name}/SKILL.md. Do not edit. -->\n"
+                if name != "foreign-skill"
+                else "# My personal skill\n"
+            )
+            (directory / "SKILL.md").write_text(body, encoding="utf-8")
+        extra = self.claude_skills / "extended-skill" / "notes.txt"
+        extra.write_text("user-owned notes\n", encoding="utf-8")
+
+        sync.sync_shims()
+
+        self.assertFalse((self.claude_skills / "removed-skill").exists())
+        self.assertEqual(extra.read_text(encoding="utf-8"), "user-owned notes\n")
         self.assertEqual(
-            sync.MODELSCOPE_TRAE_PATHS,
-            (
-                "SKILL.md",
-                "agents/openai.yaml",
-                "scripts/_modelscope_common.py",
-                "scripts/download_from_modelscope.py",
-                "scripts/modelscope_auto.py",
-                "scripts/modelscope_download_status.py",
-                "scripts/verify_modelscope_sha256.py",
-            ),
+            (self.claude_skills / "foreign-skill" / "SKILL.md").read_text(encoding="utf-8"),
+            "# My personal skill\n",
         )
+        self.assertIn("extra Claude skill shim: foreign-skill", sync.check_shims())
+        self.assertIn("extra Claude skill shim: extended-skill", sync.check_shims())
 
     def test_generate_copies_exact_bytes_and_preserves_foreign_package(self) -> None:
         self.assertEqual(sync.sync_modelscope_trae(), None)
@@ -191,6 +163,46 @@ class ModelScopeTraeProjectionTests(unittest.TestCase):
             )
         self.assertEqual(self.foreign.read_text(encoding="utf-8"), "foreign-skill-body\n")
         self.assertEqual(sync.check_modelscope_trae(), [])
+
+    def test_foreign_skill_at_canonical_name_is_preserved_and_reported(self) -> None:
+        target = self.claude_skills / "modelscope" / "SKILL.md"
+        target.write_text("# My personal ModelScope skill\n", encoding="utf-8")
+        with redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(sync.main([]), 1)
+        self.assertIn("not a generated shim", error.getvalue())
+        self.assertEqual(target.read_text(encoding="utf-8"), "# My personal ModelScope skill\n")
+
+    def test_projection_rejects_linked_directories_without_writing_outside(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        sentinel = outside / "SKILL.md"
+        sentinel.write_text("outside content\n", encoding="utf-8")
+        for target, generate in (
+            (self.claude_skills / "modelscope", sync.sync_shims),
+            (self.projected, sync.sync_modelscope_trae),
+        ):
+            with self.subTest(target=target):
+                if target.exists():
+                    (target / "SKILL.md").unlink()
+                    target.rmdir()
+                if os.name == "nt":
+                    proc = subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(target), str(outside)],
+                        capture_output=True,
+                    )
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                else:
+                    target.symlink_to(outside, target_is_directory=True)
+                try:
+                    with self.assertRaisesRegex(sync.ProjectionConflict, "linked projection path"):
+                        generate()
+                    self.assertEqual(sentinel.read_text(encoding="utf-8"), "outside content\n")
+                    self.assertEqual(list(outside.iterdir()), [sentinel])
+                finally:
+                    if os.name == "nt":
+                        target.rmdir()
+                    else:
+                        target.unlink()
 
     def test_generate_is_idempotent(self) -> None:
         sync.sync_modelscope_trae()
@@ -293,7 +305,6 @@ class CurrentTreeProjectionTests(unittest.TestCase):
         for source in sync.source_skill_dirs():
             target = ROOT / ".claude/skills" / source.name / "SKILL.md"
             with self.subTest(skill=source.name):
-                import yaml
                 expected = yaml.safe_load(frontmatter_yaml((source / "SKILL.md").read_text(encoding="utf-8")))
                 actual = yaml.safe_load(frontmatter_yaml(target.read_text(encoding="utf-8")))
                 self.assertEqual(actual, expected)
@@ -309,45 +320,26 @@ class CurrentTreeProjectionTests(unittest.TestCase):
             self.assertGreater(len(record.description), 20)
 
     def test_modelscope_yaml_documents_parse(self) -> None:
-        try:
-            import yaml
-        except ImportError:
-            yaml = None
         for skill_file in (
             CANONICAL_MODELSCOPE / "SKILL.md",
             TRAE_MODELSCOPE / "SKILL.md",
         ):
             frontmatter = frontmatter_yaml(skill_file.read_text(encoding="utf-8"))
-            metadata = parse_yaml_mapping(frontmatter)
+            metadata = yaml.safe_load(frontmatter)
             self.assertEqual(metadata["name"], "modelscope")
             self.assertIsInstance(metadata["description"], str)
             self.assertIn("ModelScope", metadata["description"])
-            if yaml is not None:
-                loaded = yaml.safe_load(frontmatter)
-                self.assertEqual(loaded["name"], metadata["name"])
-                self.assertEqual(loaded["description"], metadata["description"])
         for yaml_file in (
             CANONICAL_MODELSCOPE / "agents" / "openai.yaml",
             TRAE_MODELSCOPE / "agents" / "openai.yaml",
         ):
             text = yaml_file.read_text(encoding="utf-8")
-            document = parse_yaml_mapping(text)
+            document = yaml.safe_load(text)
             interface = document["interface"]
             self.assertIsInstance(interface, dict)
             self.assertEqual(interface["display_name"], "ModelScope")
             self.assertIn("ModelScope", interface["short_description"])
             self.assertIn("$modelscope", interface["default_prompt"])
-            if yaml is not None:
-                loaded = yaml.safe_load(text)
-                self.assertEqual(loaded["interface"]["display_name"], interface["display_name"])
-                self.assertEqual(
-                    loaded["interface"]["short_description"],
-                    interface["short_description"],
-                )
-                self.assertEqual(
-                    loaded["interface"]["default_prompt"],
-                    interface["default_prompt"],
-                )
 
     def test_generator_help_names_trae_output(self) -> None:
         proc = subprocess.run(

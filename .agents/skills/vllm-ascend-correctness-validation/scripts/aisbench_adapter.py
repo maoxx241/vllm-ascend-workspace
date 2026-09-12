@@ -18,6 +18,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 import csv
 import json
+import math
 import os
 import re
 import shlex
@@ -267,11 +268,11 @@ def normalize_summary(
     summary_csv: Path,
     *,
     label: str,
-    execution: Mapping[str, Any],
+    execution: Mapping[str, Any] | None = None,
     observation: Mapping[str, Any] | None = None,
     model_column: str = MODEL_ABBR,
 ) -> dict[str, Any]:
-    execution_block = validate_execution(execution)
+    execution_block = validate_execution(execution) if execution is not None else {}
     try:
         stream = summary_csv.open("r", encoding="utf-8-sig", newline="")
     except OSError as exc:
@@ -298,12 +299,14 @@ def normalize_summary(
             raw_value = (row.get(model_column) or "").strip()
             try:
                 metric_value = float(raw_value)
+                if not math.isfinite(metric_value):
+                    raise ValueError("non-finite metric")
             except ValueError:
                 cases.append(
                     {
                         "id": case_id,
                         "status": "error",
-                        "error": f"non-numeric AISBench metric: {raw_value!r}",
+                        "error": f"non-numeric or non-finite AISBench metric: {raw_value!r}",
                         "outputs": [],
                         "metrics": {},
                         "source": {
@@ -369,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     normalize.add_argument("--model-column", default=MODEL_ABBR)
     normalize.add_argument("--context-file")
     normalize.add_argument("--execution-id", help="Owned service execution that produced the metrics")
-    normalize.add_argument("--service", default="vllm")
+    normalize.add_argument("--service", help="Explicit task service whose launch should be attached")
     normalize.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -408,15 +411,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             emit_progress("normalize-aisbench", summary=str(args.summary_csv))
-            from vaws_task_target import task_client
-            from vaws_serving_observation import serving_observation
-            client = task_client(args.context_file)
-            execution_id = client.resolve_execution(args.execution_id, service=None if args.execution_id else args.service)
-            if execution_id is None:
-                raise AisbenchAdapterError("the native task has no matching service execution")
-            observation, execution = serving_observation(client.target(execution_id))
-            if execution is None:
-                raise AisbenchAdapterError("the service has no recorded vLLM launch configuration")
+            observation = execution = None
+            if args.execution_id or args.service:
+                from vaws_task_target import task_client
+                from vaws_serving_observation import serving_observation
+                client = task_client(args.context_file)
+                execution_id = client.resolve_execution(args.execution_id, service=None if args.execution_id else args.service)
+                if execution_id is None:
+                    raise AisbenchAdapterError("the native task has no matching service execution")
+                observation, execution = serving_observation(client.target(execution_id))
             normalized = normalize_summary(
                 args.summary_csv,
                 label=args.label,
@@ -445,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    if build_parser().parse_args().action == "normalize":
+    _entry_args = build_parser().parse_args()
+    if _entry_args.action == "normalize" and (_entry_args.execution_id or _entry_args.service):
         from vaws_managed_entry import ensure_managed_entry
         ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--summary-csv", "--output"))
     raise SystemExit(main())

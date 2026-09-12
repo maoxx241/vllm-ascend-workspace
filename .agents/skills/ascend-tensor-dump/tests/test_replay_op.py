@@ -8,9 +8,14 @@ you meant to replay.
 from __future__ import annotations
 
 import importlib.util
+import io
 import sys
 import unittest
+import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ASSET = Path(__file__).resolve().parents[1] / "assets" / "replay_op.py"
 SPEC = importlib.util.spec_from_file_location("replay_op_under_test", ASSET)
@@ -21,6 +26,32 @@ SPEC.loader.exec_module(replay_op)
 
 
 class ResolveStageTests(unittest.TestCase):
+    def test_inplace_candidate_cannot_change_reference_inputs(self):
+        class Tensor:
+            def __init__(self, value): self.value = value
+            def to(self, device): return self
+            def clone(self, *, memory_format):
+                self.asserted_format = memory_format
+                return Tensor(self.value)
+        tensor = Tensor(5)
+        observed = []
+        def candidate(x, nested):
+            self.assertIs(x, nested[0])
+            observed.append(x.value)
+            x.value = 99
+            return x
+        def reference(x, nested):
+            self.assertIs(x, nested[0])
+            observed.append(x.value)
+            return x
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(sys.modules, {"torch": SimpleNamespace(Tensor=Tensor, preserve_format="preserve")}), patch.object(
+            replay_op, "load_input_sets", return_value={"op#0": {"x": tensor, "nested": [tensor]}}
+        ), patch.object(replay_op, "resolve", side_effect=[candidate, reference]), patch.object(replay_op, "save_payload"), redirect_stdout(io.StringIO()):
+            self.assertEqual(replay_op.main(["--dump", "dump.pt", "--stage", "op", "--candidate", "candidate", "--reference", "reference", "--device", "cpu", "--out-dir", tmp]), 0)
+        self.assertEqual(observed, [5, 5])
+        self.assertEqual(tensor.value, 5)
+        self.assertEqual(tensor.asserted_format, "preserve")
+
     def test_exact_key_wins(self) -> None:
         sets = {"gmm#0": {}, "gmm#1": {}}
         self.assertEqual(replay_op.resolve_stage("gmm#1", sets), "gmm#1")

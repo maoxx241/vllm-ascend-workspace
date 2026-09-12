@@ -11,11 +11,10 @@ Start from the failing topology and per-rank timeline. Distinguish missing rank 
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
+uv run --no-project python .agents/skills/vllm-ascend-distributed-debug/scripts/distributed_debug.py --config topology.json --events rank-events.jsonl
 ```
 
 The config supplies expected_world_size, ranks and optional groups/endpoints. Event files supply observed facts. The report validates mappings and event order and generates its evidence automatically; no case initialization or event-registration steps are required.
@@ -24,6 +23,5 @@ Use graph-debug when eager passes and graph fails independent of topology. Perfo
 
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 
 - [Business input example](references/inputs.md)

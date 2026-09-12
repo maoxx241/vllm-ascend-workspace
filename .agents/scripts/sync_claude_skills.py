@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate Claude Code skill shims and the ModelScope Trae projection.
 
-`.claude/skills/<name>/SKILL.md` shims come from `.agents/skills`. The six
+`.claude/skills/<name>/SKILL.md` shims come from `.agents/skills`. The seven
 `.trae/skills/modelscope` files are copied byte-for-byte from
 `.agents/skills/modelscope`. Edit ModelScope only in that canonical package;
 this command regenerates the Trae projection.
@@ -15,7 +15,7 @@ import sys
 
 import argparse
 import json
-import shutil
+import stat
 from pathlib import Path
 
 
@@ -96,7 +96,31 @@ def _exec_bits(path: Path) -> int:
     return path.stat().st_mode & 0o111
 
 
+class ProjectionConflict(RuntimeError):
+    """A generated target is linked or contains user-owned content."""
+
+
+def _require_projection_path(root: Path, target: Path) -> None:
+    current = root
+    for part in (None, *target.relative_to(root).parts):
+        if part is not None:
+            current /= part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ProjectionConflict(f"linked projection path is not writable: {current}")
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise ProjectionConflict(f"projection target escapes its root: {target}")
+
+
+def _shim_marker(name: str) -> str:
+    return f"<!-- Generated from .agents/skills/{name}/SKILL.md. Do not edit. -->"
+
+
 def _copy_projected_file(source: Path, target: Path) -> None:
+    _require_projection_path(TRAE_SKILLS.parent, target)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(source.read_bytes())
     updated_mode = (target.stat().st_mode & ~0o111) | _exec_bits(source)
@@ -167,15 +191,34 @@ def check_generated() -> list[str]:
 
 
 def sync_shims() -> None:
+    _require_projection_path(CLAUDE_SKILLS.parent, CLAUDE_SKILLS)
     CLAUDE_SKILLS.mkdir(parents=True, exist_ok=True)
     for skill_dir in source_skill_dirs():
         target_dir = CLAUDE_SKILLS / skill_dir.name
-        target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / "SKILL.md"
+        _require_projection_path(CLAUDE_SKILLS.parent, target)
+        if target.exists() and _shim_marker(skill_dir.name) not in target.read_text(encoding="utf-8").splitlines():
+            raise ProjectionConflict(f"existing Claude skill is not a generated shim: {target}")
+        target_dir.mkdir(parents=True, exist_ok=True)
         target.write_text(expected_skill_body(skill_dir), encoding="utf-8", newline="\n")
     for existing in CLAUDE_SKILLS.iterdir():
-        if existing.is_dir() and not (AGENTS_SKILLS / existing.name / "SKILL.md").exists():
-            shutil.rmtree(existing)
+        if (
+            not existing.is_dir()
+            or existing.is_symlink()
+            or existing.resolve().parent != CLAUDE_SKILLS.resolve()
+            or (AGENTS_SKILLS / existing.name / "SKILL.md").exists()
+        ):
+            continue
+        target = existing / "SKILL.md"
+        if target.is_symlink() or list(existing.iterdir()) != [target]:
+            continue
+        try:
+            _require_projection_path(CLAUDE_SKILLS.parent, target)
+        except ProjectionConflict:
+            continue
+        if target.is_file() and _shim_marker(existing.name) in target.read_text(encoding="utf-8").splitlines():
+            target.unlink()
+            existing.rmdir()
 
 
 def sync_modelscope_trae() -> None:
@@ -214,7 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(error)
         return 1 if errors else 0
-    sync_generated()
+    try:
+        sync_generated()
+    except ProjectionConflict as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 

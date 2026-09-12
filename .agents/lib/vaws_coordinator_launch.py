@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,12 +19,10 @@ if str(LIB) not in sys.path:
 
 from vaws_dependency import (  # noqa: E402
     REMEDY,
-    USABLE_STATES,
     inspect,
 )
 
 PACKAGE = "vaws-coordinator"
-LOCAL_STATE_DIRNAME = ".vaws-local"
 
 
 class CoordinatorUnavailable(RuntimeError):
@@ -54,13 +53,6 @@ def coordinator_environment(base: Mapping[str, str] | None = None, *, repo_root:
     return env
 
 
-def historical_manager_state_dir(repo_root: Path = ROOT) -> Path:
-    """Path the pre-extraction manager used as its default ``--state-dir``."""
-    from vaws_local_state import shared_workspace_root
-
-    return shared_workspace_root(repo_root) / LOCAL_STATE_DIRNAME / "coordinator"
-
-
 def package_status(repo_root: Path = ROOT) -> dict[str, Any]:
     """Describe the installed coordinator package."""
     from vaws_local_state import agent_sessions_root
@@ -77,18 +69,15 @@ def package_status(repo_root: Path = ROOT) -> dict[str, Any]:
         "problems": info.get("problems"),
         "remedy": info.get("remedy"),
         "task_registry": str(agent_sessions_root(repo_root)),
-        "historical_manager_state_dir": str(historical_manager_state_dir(repo_root)),
-        "manager_state_dir_default": None,
     }
 
 
-def require_package(repo_root: Path = ROOT) -> dict[str, Any]:
-    info = inspect(PACKAGE, repo_root=repo_root)
-    if info["state"] not in USABLE_STATES:
+def require_package() -> None:
+    """Check availability without rereading dependency pins during startup."""
+    if find_spec("vaws_coordinator") is None:
         raise CoordinatorUnavailable(
-            f"{PACKAGE} is {info['state']}; install it with `{REMEDY}`"
+            f"{PACKAGE} is unavailable; install it with `{REMEDY}`"
         )
-    return info
 
 
 def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT, prepare_environment: bool = True) -> int:
@@ -99,7 +88,7 @@ def exec_module(module: str, args: list[str], *, repo_root: Path = ROOT, prepare
     Explicit parser help can skip workspace environment discovery because it
     exits before reading task state or launching a service.
     """
-    require_package(repo_root)
+    require_package()
     env = coordinator_environment(repo_root=repo_root) if prepare_environment else dict(os.environ)
     command = [sys.executable, "-m", module, *args]
     if os.name == "nt":

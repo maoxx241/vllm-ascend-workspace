@@ -11,7 +11,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[4]
 LIB = ROOT / ".agents" / "lib"
@@ -27,7 +27,7 @@ from vaws_comparability import (  # noqa: E402
     GRAPH_MUST_OBSERVE,
     ComparabilityError,
     consume_certificate,
-    identity_from_recorded_observation,
+    identity_from_mapping,
     issue_certificate,
 )
 from vaws_coordinator.run_manifest import (  # noqa: E402
@@ -139,6 +139,10 @@ def _compare_record(
     rtol: float,
 ) -> list[dict[str, Any]]:
     differences: list[dict[str, Any]] = []
+    for field in ("shape", "dtype", "stride", "layout"):
+        if eager.get(field) != graph.get(field):
+            differences.append({"field": field, "reason": "metadata-mismatch",
+                                "eager": eager.get(field), "graph": graph.get(field)})
     eager_stats = eager.get("stats", {})
     graph_stats = graph.get("stats", {})
     if not isinstance(eager_stats, Mapping) or not isinstance(graph_stats, Mapping):
@@ -229,7 +233,12 @@ def compare_snapshots(
     missing_in_graph = sorted(eager_keys - graph_keys)
     missing_in_eager = sorted(graph_keys - eager_keys)
     divergences: list[dict[str, Any]] = []
+    evidence_gaps: list[dict[str, Any]] = []
     for key in sorted(eager_keys & graph_keys):
+        for side, record in (("eager", eager[key]), ("graph", graph[key])):
+            if not record.get("stats") and not _flatten_numbers(record.get("sample", []), label=f"{side}.sample"):
+                evidence_gaps.append({"key": dict(zip(SNAPSHOT_KEY_FIELDS, key)), "side": side,
+                                      "reason": "snapshot has no captured numeric values"})
         differences = _compare_record(eager[key], graph[key], atol=atol, rtol=rtol)
         if differences:
             divergences.append(
@@ -257,7 +266,8 @@ def compare_snapshots(
     )
     return {
         "schema_version": 1,
-        "status": "exact-match" if not divergences else "diverged",
+        "status": "inconclusive" if evidence_gaps else "exact-match" if not divergences else "diverged",
+        "evidence_gaps": evidence_gaps,
         "eager_snapshot": str(eager_path.resolve()),
         "graph_snapshot": str(graph_path.resolve()),
         "atol": atol,
@@ -290,10 +300,7 @@ def _load_snapshot_observation(
 ) -> dict[str, Any]:
     path = explicit if explicit is not None else snapshot_identity_path(snapshot_path)
     if not path.is_file():
-        raise GraphDebugError(
-            f"{side} snapshot has no recorded identity; use a collector that records execution metadata "
-            f"in {snapshot_identity_path(snapshot_path).name}, or supply its existing metadata with --{side}-identity"
-        )
+        return {}
     return _load_json_object(path, f"{side} identity")
 
 
@@ -306,8 +313,8 @@ def build_report(eager_path: Path, graph_path: Path, *, output_dir=None, atol=0.
         raise GraphDebugError(f"output directory is not empty: {output}")
     run_id = "graph-" + uuid4().hex[:12]
     identities = {
-        side: identity_from_recorded_observation(run_id + "-" + side,
-                    _load_snapshot_observation(path, explicit=explicit, side=side))
+        side: identity_from_mapping(run_id + "-" + side,
+                    _load_snapshot_observation(path, explicit=explicit, side=side), origin="observed")
         for side, path, explicit in (("eager", eager_path, eager_identity), ("graph", graph_path, graph_identity))
     }
     certificate = issue_certificate(identities["eager"], identities["graph"],
@@ -316,8 +323,10 @@ def build_report(eager_path: Path, graph_path: Path, *, output_dir=None, atol=0.
     comparison = compare_snapshots(eager_path, graph_path, atol=atol, rtol=rtol)
     try:
         consume_certificate(certificate)
-    except ComparabilityError:
+    except ComparabilityError as exc:
+        comparison["observed_status"] = comparison["status"]
         comparison["status"] = "inconclusive"
+        comparison["reason"] = str(exc)
     comparison["comparability"] = certificate
     comparison["claim"] = "Comparison of the supplied snapshots; this does not establish a root cause or a successful model rerun."
     _atomic_write_json(output / "comparison.json", comparison)

@@ -28,12 +28,23 @@ def read_safetensors_header(filepath: str) -> dict:
     with open(filepath, "rb") as f:
         header_len_bytes = f.read(8)
         if len(header_len_bytes) < 8:
-            return {}
+            raise ValueError(f"truncated safetensors header: {filepath}")
         header_len = struct.unpack("<Q", header_len_bytes)[0]
         if header_len > 100_000_000:
-            return {}
+            raise ValueError(f"oversized safetensors header: {filepath}")
         header_bytes = f.read(header_len)
-        return json.loads(header_bytes)
+        if len(header_bytes) != header_len:
+            raise ValueError(f"truncated safetensors header: {filepath}")
+        header = json.loads(header_bytes)
+        payload_size = os.fstat(f.fileno()).st_size - 8 - header_len
+        for name, info in header.items():
+            if name == "__metadata__":
+                continue
+            offsets = info.get("data_offsets", []) if isinstance(info, dict) else []
+            if (len(offsets) != 2 or any(type(value) is not int for value in offsets)
+                    or not 0 <= offsets[0] <= offsets[1] <= payload_size):
+                raise ValueError(f"invalid tensor byte range in {filepath}: {name}")
+        return header
 
 
 def parse_tensor_info(header: dict) -> list[dict]:
@@ -55,7 +66,7 @@ def parse_tensor_info(header: dict) -> list[dict]:
             "shape": shape,
             "numel": numel,
             "byte_size": byte_size,
-            "bytes_per_element": DTYPE_SIZES.get(dtype, 2),
+            "bytes_per_element": DTYPE_SIZES.get(dtype),
         })
     return tensors
 

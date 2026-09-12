@@ -1,290 +1,123 @@
-#!/usr/bin/env python3
-"""Tests for change impact planning and evidence aggregation."""
-
+"""Report existing validation evidence without inventing a test plan."""
 from __future__ import annotations
 
 import importlib.util
 import json
 import sys
-import tempfile
-import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from vaws_coordinator.run_manifest import add_artifact, new_manifest, transition_status, write_manifest
 
 ROOT = Path(__file__).resolve().parents[4]
-SKILL = ROOT / ".agents" / "skills" / "vllm-ascend-change-validation"
-KNOWLEDGE = SKILL / "references" / "validation-rules.yaml"
-LIB = ROOT / ".agents" / "lib"
-if str(LIB) not in sys.path:
-    sys.path.insert(0, str(LIB))
-
-from vaws_coordinator.run_manifest import (  # noqa: E402
-    add_artifact,
-    new_manifest,
-    transition_status,
-    write_manifest,
-)
+SCRIPT = ROOT / ".agents/skills/vllm-ascend-change-validation/scripts/change_validation.py"
+spec = importlib.util.spec_from_file_location("change_validation_test", SCRIPT)
+assert spec and spec.loader
+change = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = change
+spec.loader.exec_module(change)
 
 
-def load_module():
-    name = "_change_validation_test"
-    spec = importlib.util.spec_from_file_location(
-        name, SKILL / "scripts" / "change_validation.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+@pytest.fixture(autouse=True)
+def report_code():
+    # Report semantics do not require a snapshot of the developer's worktree.
+    with patch("vaws_coordinator.code_identity.manifest_code", return_value={
+        "source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True,
+    }):
+        yield
 
 
-change_validation = load_module()
-NOW = "2026-07-25T12:00:00Z"
+def diff(path):
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"
 
 
-def unified_diff(path: str, added: str = "changed") -> str:
-    return (
-        f"diff --git a/{path} b/{path}\n"
-        f"--- a/{path}\n"
-        f"+++ b/{path}\n"
-        "@@ -1 +1 @@\n"
-        "-old\n"
-        f"+{added}\n"
-    )
+def existing_run(root, *, comparison=True, certificate=None, parent="another-task"):
+    manifest = new_manifest(run_type="correctness", run_id="existing-case", parent_run_id=parent, workspace_root=ROOT)
+    if comparison:
+        artifact = root / "comparison.json"
+        artifact.write_text(json.dumps({"status": "passed", "cases": []}), encoding="utf-8")
+        manifest = add_artifact(manifest, name="comparison", kind="comparison", uri=str(artifact))
+    if certificate is not None:
+        artifact = root / "certificate.json"
+        artifact.write_text(json.dumps(certificate), encoding="utf-8")
+        manifest = add_artifact(manifest, name="comparability-certificate", kind="comparability-certificate", uri=str(artifact))
+    manifest = transition_status(transition_status(manifest, "running"), "passed")
+    path = root / "existing.json"
+    write_manifest(path, manifest)
+    return path
 
 
-class PlanningTests(unittest.TestCase):
-    def test_graph_change_requires_eager_and_graph(self) -> None:
-        knowledge = json.loads(KNOWLEDGE.read_text(encoding="utf-8"))
-        summary = change_validation.parse_diff(
-            unified_diff("vllm_ascend/graph/acl_graph.py")
-        )
-        impact, plan = change_validation.build_plan(summary, knowledge)
-        checks = {item["check"] for item in plan["items"]}
-        self.assertIn("correctness:eager", checks)
-        self.assertIn("correctness:graph", checks)
-        self.assertIn("graph", {row["category"] for row in impact["impacts"]})
-
-    def test_unknown_change_gets_required_fallback(self) -> None:
-        knowledge = json.loads(KNOWLEDGE.read_text(encoding="utf-8"))
-        summary = change_validation.parse_diff(unified_diff("docs/niche_note.md"))
-        _impact, plan = change_validation.build_plan(summary, knowledge)
-        self.assertTrue(plan["manual_review_required"])
-        self.assertEqual(plan["items"][0]["check"], "correctness:targeted-smoke")
-        self.assertEqual(plan["items"][0]["priority"], "required")
-
-    def test_duplicate_checks_merge_and_required_wins(self) -> None:
-        knowledge = {
-            "entries": [
-                {
-                    "id": "one",
-                    "status": "active",
-                    "rule": {
-                        "category": "a",
-                        "path_patterns": ["target"],
-                        "recommended_checks": ["correctness:smoke"],
-                    },
-                },
-                {
-                    "id": "two",
-                    "status": "active",
-                    "rule": {
-                        "category": "b",
-                        "path_patterns": ["target"],
-                        "required_checks": ["correctness:smoke"],
-                    },
-                },
-            ]
-        }
-        summary = change_validation.parse_diff(unified_diff("target.py"))
-        _impact, plan = change_validation.build_plan(summary, knowledge)
-        self.assertEqual(len(plan["items"]), 1)
-        self.assertEqual(plan["items"][0]["priority"], "required")
-        self.assertEqual(plan["items"][0]["sources"], ["one", "two"])
-
-    def test_path_keywords_in_changed_document_text_do_not_trigger(self) -> None:
-        knowledge = json.loads(KNOWLEDGE.read_text(encoding="utf-8"))
-        summary = change_validation.parse_diff(
-            unified_diff("docs/note.md", added="graph worker quantization scheduler")
-        )
-        impact, plan = change_validation.build_plan(summary, knowledge)
-        self.assertEqual(impact["impacts"], [])
-        self.assertTrue(plan["manual_review_required"])
+def test_document_change_creates_no_implicit_npu_requirement(tmp_path):
+    report = change.build_report(diff_text=diff("docs/graph-kernel-note.md"), baseline="base", candidate="next", output_dir=tmp_path / "report")
+    summary = json.loads(Path(report["summary"]).read_text(encoding="utf-8"))
+    assert summary["runs"] == []
+    assert report["evidence_status"] == "none"
+    assert report["status"] == "inconclusive"
+    assert not (tmp_path / "report/validation-plan.json").exists()
+    assert "targeted-smoke" not in Path(report["report"]).read_text(encoding="utf-8")
 
 
-def plan_graph_change(output: Path, run_id: str = "change-validation-1") -> list[str]:
-    change_validation._prepare_report(
-        output,
-        run_id=run_id,
-        baseline="base",
-        candidate="candidate",
-        goal="graph fix",
-        target_repositories=["vllm-ascend"],
-        diff_text=unified_diff("graph_mode.py"),
-        knowledge_path=KNOWLEDGE,
-        created_at=NOW,
-    )
-    plan = json.loads((output / "validation-plan.json").read_text(encoding="utf-8"))
-    return [item["id"] for item in plan["items"] if item["priority"] == "required"]
+def test_unrelated_passed_run_is_retained_without_proving_change(tmp_path):
+    child = existing_run(tmp_path)
+    before = child.read_bytes()
+    report = change.build_report(diff_text=diff("graph_mode.py"), baseline="base", candidate="next", evidence=[child], output_dir=tmp_path / "report")
+    summary = json.loads(Path(report["summary"]).read_text(encoding="utf-8"))
+    assert summary["runs"][0]["status"] == "passed"
+    assert summary["runs"][0]["revision_match"] == "unknown"
+    assert report["status"] == "inconclusive"
+    assert report["evidence_status"] == "incomplete"
+    assert child.read_bytes() == before
 
 
-def passed_child(
-    path: Path,
-    *,
-    parent_run_id: str | None,
-    with_artifact: bool = True,
-    run_type: str = "correctness",
-) -> None:
-    child = new_manifest(
-        run_type=run_type,
-        run_id="child-1",
-        parent_run_id=parent_run_id,
-        created_at=NOW,
-        workspace_root=ROOT,
-    )
-    child = transition_status(child, "running", updated_at=NOW)
-    if with_artifact:
-        (path.parent / "comparison.json").write_text(json.dumps({"status": "passed"}), encoding="utf-8")
-        child = add_artifact(
-            child, name="comparison", kind="comparison", uri="comparison.json", updated_at=NOW
-        )
-    child = transition_status(child, "passed", updated_at=NOW)
-    write_manifest(path, child)
+def test_missing_artifact_is_visible_without_losing_report(tmp_path):
+    child = existing_run(tmp_path)
+    (tmp_path / "comparison.json").unlink()
+    report = change.build_report(diff_text=diff("worker.py"), baseline="base", candidate="next", evidence=[child], output_dir=tmp_path / "report")
+    summary = json.loads(Path(report["summary"]).read_text(encoding="utf-8"))
+    assert summary["runs"][0]["artifacts"][0]["available"] is False
+    assert "artifact unavailable: comparison" in summary["runs"][0]["limitations"]
+    assert report["status"] == "inconclusive"
+    assert report["evidence_status"] == "incomplete"
 
 
-class AggregationTests(unittest.TestCase):
-    def test_one_call_does_not_assign_bare_report_to_unrelated_checks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            child_path = root / "child.json"
-            passed_child(child_path, parent_run_id=None)
-            result = change_validation.build_report(diff_text=unified_diff("graph_mode.py"),
-                         baseline="base", candidate="candidate", evidence=[child_path], output_dir=root / "report")
-            self.assertEqual(result["status"], "inconclusive")
-            self.assertTrue(result["missing_required"])
-
-    def test_missing_artifact_file_is_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            child_path = root / "child.json"
-            passed_child(child_path, parent_run_id=None)
-            (root / "comparison.json").unlink()
-            with self.assertRaisesRegex(change_validation.ChangeValidationError, "cannot read comparison"):
-                change_validation.build_report(diff_text=unified_diff("graph_mode.py"), baseline="base",
-                       candidate="candidate", evidence=[child_path], output_dir=root / "report")
-
-    def test_passed_child_can_complete_required_plan(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "change"
-            required_ids = plan_graph_change(output)
-            child_path = root / "child-manifest.json"
-            passed_child(child_path, parent_run_id="change-validation-1")
-            change_validation._link_evidence(
-                output,
-                child_manifest_path=child_path,
-                covers=required_ids,
-                updated_at=NOW,
-            )
-            result = change_validation._finalize_report(output, updated_at=NOW)
-            self.assertEqual(result["status"], "passed")
-            report = (output / "pr-validation-report.md").read_text(encoding="utf-8")
-            self.assertIn("child-1", report)
-
-    def test_child_without_parent_run_id_can_be_linked_post_hoc(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "change"
-            required_ids = plan_graph_change(output)
-            child_path = root / "orphan.json"
-            passed_child(child_path, parent_run_id=None)
-            change_validation._link_evidence(
-                output,
-                child_manifest_path=child_path,
-                covers=required_ids,
-                updated_at=NOW,
-            )
-            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
-            self.assertEqual(links["runs"][0]["association"], "post-hoc")
-            result = change_validation._finalize_report(output, updated_at=NOW)
-            self.assertEqual(result["status"], "passed")
-
-    def test_child_of_another_parent_can_be_linked_post_hoc(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "change"
-            required_ids = plan_graph_change(output)
-            child_path = root / "foreign.json"
-            passed_child(child_path, parent_run_id="change-validation-other")
-            change_validation._link_evidence(
-                output,
-                child_manifest_path=child_path,
-                covers=required_ids,
-                updated_at=NOW,
-            )
-            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
-            self.assertEqual(links["runs"][0]["association"], "post-hoc")
-
-    def test_passed_child_without_artifacts_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "change"
-            required_ids = plan_graph_change(output)
-            child_path = root / "bare.json"
-            passed_child(
-                child_path, parent_run_id="change-validation-1", with_artifact=False
-            )
-            with self.assertRaisesRegex(
-                change_validation.ChangeValidationError, "links no artifacts"
-            ):
-                change_validation._link_evidence(
-                    output,
-                    child_manifest_path=child_path,
-                    covers=required_ids,
-                    updated_at=NOW,
-                )
-
-    def test_debug_manifest_cannot_cover_correctness_requirement(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            output = root / "change"
-            required_ids = plan_graph_change(output)
-            child_path = root / "debug-child.json"
-            passed_child(
-                child_path,
-                parent_run_id="change-validation-1",
-                run_type="debug",
-            )
-            with self.assertRaisesRegex(
-                change_validation.ChangeValidationError,
-                r"run_type 'debug'.*requires run_type 'correctness'",
-            ):
-                change_validation._link_evidence(
-                    output,
-                    child_manifest_path=child_path,
-                    covers=required_ids,
-                    updated_at=NOW,
-                )
-            links = json.loads((output / "linked-runs.json").read_text(encoding="utf-8"))
-            self.assertEqual(links["runs"], [])
-
-    def test_missing_required_evidence_is_inconclusive(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "change"
-            change_validation._prepare_report(
-                output,
-                run_id="change-validation-2",
-                baseline="base",
-                candidate="candidate",
-                goal="graph fix",
-                target_repositories=["vllm-ascend"],
-                diff_text=unified_diff("graph_mode.py"),
-                knowledge_path=KNOWLEDGE,
-                created_at=NOW,
-            )
-            result = change_validation._finalize_report(output, updated_at=NOW)
-            self.assertEqual(result["status"], "inconclusive")
-            self.assertTrue(result["missing_required"])
+def test_missing_revision_stays_unknown_and_keeps_certificate_reason(tmp_path):
+    from vaws_comparability import identity_from_recorded_observation, issue_certificate
+    baseline = {"workspace_snapshot": {"vllm_ascend_commit": "base-sha"}, "environment": {"cann": "test"}, "model": {"path": "/models/test"}, "topology": {"tp": 1}}
+    candidate = {"environment": {"cann": "changed"}, "model": {"path": "/models/test"}, "topology": {"tp": 1}}
+    certificate = issue_certificate(identity_from_recorded_observation("base", baseline), identity_from_recorded_observation("next", candidate))
+    record = change.summarize_evidence(existing_run(tmp_path, certificate=certificate), baseline="base-sha", candidate="next-sha")
+    assert record["revision_match"] == "unknown"
+    assert record["observed_scope"]["baseline"]["workspace_snapshot.vllm_ascend_commit"] == "base-sha"
+    assert certificate["blocking_reasons"]
+    assert all(any(reason in limitation for limitation in record["limitations"]) for reason in certificate["blocking_reasons"])
+    assert any("missing for at least one side" in reason for reason in record["limitations"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_recorded_revision_pair_is_reused_without_parent_reassociation(tmp_path):
+    from vaws_comparability import identity_from_recorded_observation, issue_certificate
+    def identity(revision):
+        return {"workspace_snapshot": {"vllm_ascend_commit": revision}, "environment": {"cann": "test"}, "model": {"path": "/models/test"}, "topology": {"tp": 1}}
+    certificate = issue_certificate(identity_from_recorded_observation("base", identity("base-sha")), identity_from_recorded_observation("next", identity("next-sha")), vary=["workspace_snapshot.vllm_ascend_commit"])
+    child = existing_run(tmp_path, certificate=certificate)
+    record = change.summarize_evidence(child, baseline="base-sha", candidate="next-sha")
+    assert record["revision_match"] == "matched"
+    assert record["limitations"] == []
+    assert change.summarize_evidence(child, baseline="wrong-sha", candidate="next-sha")["revision_match"] == "mismatched"
+
+
+def test_bare_passed_status_cannot_create_verified_coverage(tmp_path):
+    record = change.summarize_evidence(existing_run(tmp_path, comparison=False), baseline="base", candidate="next")
+    assert record["revision_match"] == "unknown"
+    assert "the run links no artifacts" in record["limitations"]
+
+
+def test_diff_summary_keeps_changed_paths_and_counts():
+    summary = change.parse_diff(diff("docs/note.md") + diff("vllm_ascend/worker.py"))
+    assert summary["file_count"] == 2
+    assert summary["additions"] == summary["deletions"] == 2
+
+
+def test_empty_diff_is_an_input_error(tmp_path):
+    with pytest.raises(change.ChangeValidationError, match="no changed files"):
+        change.build_report(diff_text="", baseline="base", candidate="next", output_dir=tmp_path / "report")

@@ -123,43 +123,6 @@ the tested code identifiable throughout that sequence. CI follow-ups select a
 working Git Bash for local Linux-peer fixtures and keep POSIX-only grep fixtures
 on Linux/macOS while preserving native Windows search coverage.
 
-## Experience and efficiency notes for discussion
-
-These are proposals for later discussion, not new execution gates.
-
-| Observation | Suggested follow-up |
-| --- | --- |
-| Local configuration errors sometimes appear only after heavy imports | Validate inexpensive arguments/configuration before importing large dependency trees |
-| Knowledge install includes many parsers and CPU inference packages | Document download/cache size and an offline package-cache workflow; discuss a supported minimal client extra separately |
-| Cross-drive uv cache cannot hardlink | Document `UV_LINK_MODE=copy` for that layout |
-| Repeated Git identity snapshots dominated schema property tests | Keep real Git integration cases; use fixed identity in schema-only tests; this repair already reduced the affected group from timeout to seconds |
-| A liveness check terminated the monolithic test runner | Retain bounded per-suite logs/XML and aggregate results for resumable diagnosis |
-| Examples often assume POSIX paths, quoting and executable bits | Add Windows invocation examples beside the owning interface |
-| Native Windows OpenSSH lacks supported ControlMaster | Preserve independent connections; measure batching before changing transport semantics |
-| Two read/status calls timed out before retries passed | Add connection/transport phase timing before choosing retry and timeout policy |
-| Services survived failed fixture cleanup | Register owned cleanup immediately; retain ownership records until exit is confirmed |
-| Help-only checks accepted a crashed Windows process | Keep exit-code and real stdin/lifetime assertions in native CI |
-| Long checks can produce little progress | Prefer per-file progress, persistent logs and bounded waits; reuse unaffected evidence |
-
-### Proposed implementation order
-
-This is a proposal for follow-up work, not a claim of implemented behavior.
-Process cleanup, help-process exit checks and redundant Git snapshots in
-schema-only property tests were already repaired in this validation.
-
-| Order | Concrete change and owner | Acceptance evidence |
-| --- | --- | --- |
-| 1 — faster local feedback | Workspace and package CLI owners: measure cold/warm help, malformed arguments and missing configuration; parse these before loading heavy backends. Keep real operations on the existing package entry points. | Same error/exit contract and Unicode behavior; no network or service startup for help/local argument errors; compare median and p95 before/after. Target common help/local errors below one second on the validation machine. |
-| 1 — repeatable local checks | Workspace: promote the bounded per-suite validation runner into a maintained helper using ordinary pytest/JUnit. Emit suite, elapsed time and log path to stderr; keep one summary on stdout. Allow bounded concurrency and failed-only reruns with the exact source/dependency/platform fingerprint. | Inject a crash, timeout and interruption: unrelated suites finish, exit code remains nonzero, logs survive, owned children exit. Changed inputs invalidate previous pass results. Keep Windows and Linux coverage explicit. |
-| 2 — explain slow operations | remote-dev/coordinator owners: extend existing runtime-feedback fields with measurable phase timing. Separate local startup, SSH connection, remote execution and transfer where observable; report unknown where SSH cannot distinguish phases. Reuse existing progress/record references. | Controlled slow connect/command/transfer cases produce distinct evidence; steady-state status stays quick; no credential leakage, global SSH changes or replay of arbitrary business commands. |
-| 2 — cheaper repeated SSH reads | remote-dev: first benchmark independent Windows connections and existing calls. Consider one explicit bounded batch for related read-only observations only if round-trip savings are material. | Same endpoint/path policy, per-operation outcomes and bounded output; compare p50/p95 and round-trip count. Mutating commands retain their current one-shot semantics. |
-| 3 — installation and Windows recipes | Workspace/knowledge owners: document measured package/cache size, initial and cached install times, offline wheel/cache preparation, PowerShell invocation and cross-drive copy mode. Evaluate a client/backend dependency split only after measuring its benefit. | A clean Windows environment can install from the prepared offline inputs and run required capabilities. Cached reinstall downloads no unchanged wheels. Existing full knowledge behavior remains the workspace default; any optional package split needs its own compatibility test. |
-
-Each follow-up should be a small owner PR plus a consumer change only when
-needed. Report baseline, changed behavior and measured improvement in the PR.
-Reuse the existing runtime-feedback contract; do not add another scheduler,
-resource ledger or recovery workflow to the workspace.
-
 ## Limits
 
 Real hosted ModelScope download/authentication and large weight transfers were

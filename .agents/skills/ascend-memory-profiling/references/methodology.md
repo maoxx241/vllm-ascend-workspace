@@ -1,116 +1,24 @@
-# Methodology: Ascend NPU Memory Profiling
+# Ascend memory attribution methodology
 
-## Relationship to remote-dev
+Use the selected coordinator execution for collection and ordinary remote-dev endpoint I/O for its files. No second allocation is needed to inspect or stop an existing execution.
 
-Use remote-dev companion tools (`remote_*` MCP tools, launched via
-`uv run remote-dev` / MCP) for ad hoc remote
-read/edit/bash/search/patch around memory profiling setup and output
-inspection. This skill owns HBM attribution methodology and keeps the existing
-scripts as the managed VAWS compatibility backend.
+## Collection
 
-## Core Principle
+Standalone collection passes an msprof wrapper as a local input to the serving skill. The wrapper is embedded in the same managed run; its output is the runtime directory returned by that run. Requested model, parallelism, eager/graph and other serving options must match the report.
 
-**msprof is the primary data source.** It observes memory allocations at the CANN runtime level, capturing components that PyTorch's allocator cannot see (HCCL communication buffers, CANN runtime internal allocations, system logging buffers). npu-smi provides hardware-level ground truth for total HBM usage. vLLM logs provide application-level attribution for weights and KV cache.
+After HTTP readiness, capture npu-smi, startup logs and the inference response. Capture npu-smi again after the request. Stop the owned execution gracefully, then synchronously export its PROF directory and retain export failures. Do not infer completion by polling all msprof processes on a shared machine.
 
-## Phased Collection
+Attach collection uses the matching serving business receipt and execution ID. It leaves a live service running, so export may remain pending. A second collection into the same run requires that exact execution. There is no idle baseline unless an applicable measured baseline was explicitly supplied.
 
-### Phase 0: Static Baseline
+## Evidence boundaries
 
-**Tool:** `npu-smi info`  
-**When:** Before any vLLM process starts  
-**What it measures:** Driver and base runtime memory that persists regardless of workload  
-**Typical values:** ~2800-3000 MB per 910B4 device  
-**Why needed:** Establishes the floor for delta calculations
+- npu-smi is a device snapshot. A measurement after inference is not an activation peak; its delta is reported separately from the earlier ready-state breakdown.
+- msprof component maxima can come from different timestamps. Their sum is a diagnostic comparison, not an exact simultaneous allocation balance.
+- Assign a CSV to a device only when its provenance identifies that device. Unassigned or multi-device process data stays in the global evidence section.
+- Parse units from the actual CSV header and vLLM log. Normalize GB and GiB explicitly before comparison.
+- Safetensors byte ranges describe stored tensor bytes exactly. Tensor-name categories, per-device sharding, GQA replication, quantization transforms and tied weights need model-specific interpretation. Label per-device weight values as estimates unless measured.
+- Missing idle HBM, missing component CSVs and missing device samples remain unknown. Do not fill them with typical hardware values, inferred card indices or a fixed percentage.
+- Expert parallelism comes from the execution configuration; an MoE model alone does not prove EP is enabled.
+- Keep signed residuals visible. Do not force a residual below a fixed threshold or invent component labels to balance it.
 
-### Phase 1: Service Startup with msprof
-
-**Tool:** `msprof --application --sys-hardware-mem=on`  
-**When:** Wraps the vLLM serve process from start to finish  
-**What it captures:**
-- `npu_module_mem_*.csv`: Per-component (APP, HCCL, RUNTIME, SLOG, etc.) memory timeline at configurable sampling frequency
-- `npu_mem_*.csv`: Device-level and APP-level HBM timeline
-- `op_summary_*.csv`: Operator execution data
-- `communication_statistic_*.csv`: HCCL communication data
-
-**Key insight:** msprof creates one PROF directory per process. With TP=4, you get 4 PROF directories, one per worker. Each contains device-specific data.
-
-### Phase 2: Service Ready State
-
-**Tool:** `npu-smi info` + vLLM startup log parsing  
-**When:** After vLLM reports "Available routes are" (service ready)  
-**What it measures:**
-- Total HBM after model load + KV cache allocation
-- vLLM self-reported: "Loading model weights took X GB"
-- vLLM self-reported: "Available KV cache memory: X GiB"
-- vLLM self-reported: "GPU KV cache size: N tokens"
-
-### Phase 3: Under Inference Load
-
-**Tool:** `npu-smi info` + inference request  
-**When:** During active inference  
-**What it measures:** Peak HBM including activations  
-**Delta from Phase 2:** Activation memory estimate
-
-### Phase 4-5: Stop and Export
-
-**Tool:** Process termination + `msprof --export`  
-**What it does:** Converts binary PROF data to readable CSV format
-
-## Component Attribution Logic
-
-### Fixed Overhead
-```
-fixed_overhead = npu_smi_phase0.HBM_Used
-```
-This includes driver, base CANN runtime, and system services.
-
-### Model Weights
-```
-weights = vllm_log."Loading model weights took X GB"
-theory  = sum(param_count × bytes_per_element) / TP_size
-```
-Cross-validation: `|weights - theory| / theory < 5%` is expected.
-
-### KV Cache
-```
-kv_cache = vllm_log."Available KV cache memory: X GiB"
-```
-This is pre-allocated by the vLLM KV cache allocator. For MoE models, KV cache is shared across experts.
-
-### HCCL Buffers
-```
-hccl = max(msprof.npu_module_mem where Component=HCCL)
-```
-Communication buffers for tensor parallel all-reduce operations. Scale with TP size.
-
-### CANN Runtime
-```
-runtime = max(msprof.npu_module_mem where Component=RUNTIME)
-```
-CANN runtime's internal memory management overhead.
-
-### Activations
-```
-activations = npu_smi_phase3.HBM_Used - npu_smi_phase2.HBM_Used
-```
-Transient memory for intermediate computations during inference.
-
-### Unattributed
-```
-unattributed = npu_smi_ready.HBM_Used - sum(all_components)
-```
-Explicitly reported with percentage. Should be < 5% for a well-attributed profile.
-
-## Cross-Validation Strategy
-
-1. **npu-smi total vs component sum**: `|npu_smi - sum(components)| / npu_smi < 5%`
-2. **msprof APP vs vLLM (weights+KV)**: `APP ≈ weights + KV + minor_overhead`
-3. **Weights vs theory**: `|log_weight - theory_weight| / theory < 5%`
-4. **msprof Device vs npu-smi**: Should be close but may differ by timing
-
-## Known Behaviors
-
-- **msprof wrapping adds overhead**: ~50-60s extra startup time due to sys-hardware-mem sampling initialization
-- **npu-smi baseline varies**: The "fixed overhead" includes small transient allocations from other system services. Repeat measurement recommended.
-- **MoE models (e.g., Qwen3.5-35B-A3B)**: With EP=TP, each device holds a fraction of experts. Weight size per device may be counter-intuitive for MoE.
-- **expandable_segments**: vLLM sets `PYTORCH_NPU_ALLOC_CONF=expandable_segments:True`, meaning the PyTorch allocator may reserve more HBM than currently allocated. msprof APP tracks reserved (not just allocated).
+Compare measurements from matching devices, ranks and time intervals. Where the available data cannot support a component-level statement, report the limitation and retain the raw artifact for further analysis.

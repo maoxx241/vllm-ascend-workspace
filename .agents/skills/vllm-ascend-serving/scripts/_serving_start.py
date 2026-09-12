@@ -8,6 +8,7 @@ import json
 import re
 import shlex
 import sys
+import uuid
 import time
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 
 if __name__ == "__main__":
     from vaws_managed_entry import ensure_managed_entry
-    ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
+    ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--wrap-script-local",))
 
 ensure_workspace_interpreter(repo_root=ROOT)
 
@@ -41,7 +42,6 @@ from _serving_common import (  # noqa: E402
     service_port_of,
     ssh_exec,
 )
-from vaws_local_state import effective_workspace_alias, load_workspace_identity  # noqa: E402
 from vaws_session_state import load_serving_state, save_serving_state  # noqa: E402
 from vaws_coordinator.presentation import execution_summary
 from vaws_task_target import (  # noqa: E402
@@ -126,6 +126,8 @@ def build_serve_command(
     dp: int | None,
     extra_args: list[str],
     wrap_script: str = "",
+    wrap_script_content: str = "",
+    runtime_dir: str = "",
     expected_vllm: str = "",
     preflight_only: bool = False,
 ) -> str:
@@ -177,15 +179,23 @@ def build_serve_command(
         ])
         lines.append('"$VAWS_PYTHON" -c ' + shlex.quote(parse_only) + " " + " ".join(argv[3:]))
         return "\n".join(lines)
-    if wrap_script:
-        lines.append("runtime_dir=$(mktemp -d /tmp/vaws-serve.XXXXXX)")
+    if wrap_script or wrap_script_content:
+        if runtime_dir:
+            lines.extend([f"runtime_dir={shlex.quote(runtime_dir)}", 'mkdir -m 700 -- "$runtime_dir"'])
+        else:
+            lines.append("runtime_dir=$(mktemp -d /tmp/vaws-serve.XXXXXX)")
         lines.append("cat > \"$runtime_dir/_serve.sh\" << 'VAWS_SERVE_EOF'")
         lines.append("#!/bin/bash")
         lines.append(f'if [ -z "${{VAWS_PYTHON:-}}" ]; then echo "VAWS_PYTHON is unset" >&2; exit 1; fi')
         lines.append(f"exec {cmd_str}")
         lines.append("VAWS_SERVE_EOF")
         lines.append("chmod +x \"$runtime_dir/_serve.sh\"")
-        lines.append(f"exec bash {shlex.quote(wrap_script)} \"$runtime_dir/_serve.sh\" \"$runtime_dir\"")
+        if wrap_script_content:
+            delimiter = "VAWS_WRAPPER_" + uuid.uuid4().hex
+            lines.extend([f'cat > "$runtime_dir/_wrap.sh" << \'{delimiter}\'', wrap_script_content,
+                          delimiter, 'exec bash "$runtime_dir/_wrap.sh" "$runtime_dir/_serve.sh" "$runtime_dir"'])
+        else:
+            lines.append(f"exec bash {shlex.quote(wrap_script)} \"$runtime_dir/_serve.sh\" \"$runtime_dir\"")
     else:
         lines.append(f"exec {cmd_str}")
     return "\n".join(lines)
@@ -405,7 +415,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--health-timeout", type=int, default=DEFAULT_HEALTH_TIMEOUT)
     parser.add_argument("--no-wait", action="store_true",
                         help="return the execution receipt without waiting for launch or HTTP readiness")
-    parser.add_argument("--wrap-script", default="")
+    wrapper = parser.add_mutually_exclusive_group()
+    wrapper.add_argument("--wrap-script", default="", help="existing remote wrapper script")
+    wrapper.add_argument("--wrap-script-local", default="", help="local UTF-8 wrapper embedded in this managed execution")
     parser.add_argument("--npu-count", type=int)
     parser.add_argument("--recipe", help="named coordinator environment recipe")
     parser.add_argument("--python-abi", dest="python_abi")
@@ -428,7 +440,7 @@ def _parse_extra_env(items: list[str]) -> dict[str, str]:
 def write_business_report(task_id: str, payload: dict[str, Any]) -> None:
     report = {key: payload.get(key) for key in (
         "model", "served_model_name", "tp", "dp", "devices", "env", "extra_args",
-        "wrap_script", "service", "recipe", "python_abi", "cann",
+        "wrap_script", "wrap_script_content", "runtime_dir", "execution_id", "service", "recipe", "python_abi", "cann",
     )}
     save_serving_state(task_id, report)
 
@@ -441,6 +453,10 @@ def main(argv: list[str] | None = None) -> int:
         idx = argv.index("--")
         own_argv, vllm_extra = argv[:idx], argv[idx + 1 :]
     args = build_parser().parse_args(own_argv)
+    for flag, value in (("--npu-count", args.npu_count), ("--tp", args.tp), ("--dp", args.dp)):
+        if value is not None and value <= 0:
+            print_json({"status": "needs_input", "error": f"{flag} must be positive"})
+            return 1
     preset = load_preset(args.preset) if args.preset else None
     if preset:
         if args.tp is None and preset.get("tp") is not None:
@@ -492,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
             launch_env = reject_reserved_env(merged.get("env") or {})
             launch_extra_args = list(merged.get("extra_args") or [])
             wrap_script = args.wrap_script or str(merged.get("wrap_script") or "")
+            wrap_script_content = str(merged.get("wrap_script_content") or "") if not args.wrap_script else ""
             args.recipe = merged.get("recipe") or args.recipe
             args.python_abi = merged.get("python_abi") or args.python_abi
             args.cann = merged.get("cann") or args.cann
@@ -505,18 +522,19 @@ def main(argv: list[str] | None = None) -> int:
             launch_env = extra_env
             launch_extra_args = vllm_extra
             wrap_script = args.wrap_script or ""
+            wrap_script_content = ""
+        if args.wrap_script_local:
+            wrap_script_content = Path(args.wrap_script_local).read_text(encoding="utf-8")
+            if not wrap_script_content.strip() or len(wrap_script_content.encode("utf-8")) > 1024 * 1024:
+                raise ValueError("local wrapper must be nonempty UTF-8 text at most 1 MiB")
+            wrap_script = ""
+        runtime_dir = "/tmp/vaws-serve." + uuid.uuid4().hex if wrap_script or wrap_script_content else ""
         problems = local_preset_problems(preset, launch_extra_args)
         if problems:
             print_json({"status": "needs_input", "phase": "preflight", "problems": problems})
             return 1
-        identity = load_workspace_identity()
-        alias = effective_workspace_alias()
-        if identity is not None:
-            launch_env["VAWS_AGENT_ID"] = identity["agent_id"]
-        if alias:
-            launch_env["VAWS_AGENT_ALIAS"] = alias
         device_list = parse_devices_csv(devices) if devices else []
-        npu_count = args.npu_count or (int(tp) * int(dp or 1) if tp is not None else 1)
+        npu_count = args.npu_count if args.npu_count is not None else (int(tp) * int(dp or 1) if tp is not None else 1)
         command = build_serve_command(
             model=model,
             served_model_name=served_model_name,
@@ -524,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
             dp=dp,
             extra_args=launch_extra_args,
             wrap_script=wrap_script,
+            wrap_script_content=wrap_script_content,
+            runtime_dir=runtime_dir,
             expected_vllm=str((preset or {}).get("vllm_version") or ""),
         )
         business_report = {
@@ -535,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
             "env": launch_env,
             "extra_args": launch_extra_args,
             "wrap_script": wrap_script or None,
+            "wrap_script_content": wrap_script_content or None,
+            "runtime_dir": runtime_dir or None,
             "service": args.service,
             "recipe": args.recipe,
             "python_abi": args.python_abi,
@@ -575,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
             service=args.service,
             restart=bool(args.relaunch),
         )
+        business_report["execution_id"] = reply.get("execution_id")
         write_business_report(task_id, business_report)
         if not args.no_wait:
             reply = wait_for_launch(client, reply, deadline)
@@ -591,6 +614,7 @@ def main(argv: list[str] | None = None) -> int:
             "tp": tp,
             "dp": dp,
             "devices": devices,
+            "runtime_dir": runtime_dir or None,
             **execution_summary(reply),
         }
         if kind == "pending" or (args.no_wait and kind == "running"):

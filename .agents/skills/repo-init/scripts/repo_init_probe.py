@@ -7,15 +7,13 @@ recursive submodule state, and local remote topology for:
   - vllm
   - vllm-ascend
 
-Its only pre-checkpoint mutation is idempotently creating the untracked local
-workspace UUID required by project initialization.
+The probe is read-only. Remote fork lookup is optional and requested explicitly.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 
@@ -32,24 +30,7 @@ import platform
 import re
 import shutil
 import subprocess
-from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
-
-LIB_DIR = pathlib.Path(__file__).resolve().parents[3] / "lib"
-if str(LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(LIB_DIR))
-
-from vaws_local_state import (  # noqa: E402
-    ensure_workspace_identity,
-    profile_summary,
-    workspace_identity_summary,
-)
-
-from _profile_choice_common import (  # noqa: E402
-    detect_git_username_candidate,
-    fixed_machine_username_question,
-    fixed_workspace_alias_question,
-)
 
 COMMUNITY = {
     "workspace": "vllm-ascend-workspace/vllm-ascend-workspace",
@@ -584,29 +565,13 @@ def compact_fork_summary(forks: Dict[str, Any]) -> Dict[str, Any]:
 
 def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     gh = payload.get("gh") or {}
-    profile = payload.get("workspace_profile") or {}
-    identity = payload.get("workspace_identity") or {}
     compact_submodules = compact_submodule_summary(payload.get("submodules") or [])
-    repo_root_value = payload.get("repo_root")
-    repo_root = pathlib.Path(repo_root_value) if isinstance(repo_root_value, str) and repo_root_value else None
-    machine_username_question = fixed_machine_username_question(repo_root)
-    detected_git_username = detect_git_username_candidate(repo_root)
     compact: Dict[str, Any] = {
         "platform": {
             "kind": payload.get("platform", {}).get("kind"),
             "machine": payload.get("platform", {}).get("machine"),
         },
         "repo_root": payload.get("repo_root"),
-        "workspace_profile": {
-            "exists": profile.get("exists"),
-            "choice_required": profile.get("choice_required"),
-            "username_rules": profile.get("username_rules"),
-            "default_generated_pattern": profile.get("default_generated_pattern"),
-            "machine_username": profile.get("machine_username"),
-            "container_name": profile.get("container_name"),
-            "source": profile.get("source"),
-        },
-        "workspace_identity": identity,
         "gh": {
             "installed": gh.get("installed"),
             "logged_in": gh.get("logged_in"),
@@ -623,58 +588,24 @@ def compact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             for role, repo in (payload.get("repos") or {}).items()
         },
         "forks": compact_fork_summary(payload.get("forks") or {}),
-        "decision_checkpoint": {
-            "required_for_broad_init": bool(
-                profile.get("choice_required") or identity.get("alias_choice_required")
-            ),
-            "machine_username": {
-                "required": bool(profile.get("choice_required")),
-                "username_rules": profile.get("username_rules"),
-                "default_generated_pattern": profile.get("default_generated_pattern"),
-                "default_random_allowed": True,
-                "default_random_requires_explicit_user_consent": True,
-                "fixed_options_only": True,
-                "detected_git_username": detected_git_username,
-                "question_template": machine_username_question,
-            },
-            "workspace_alias": {
-                "required": bool(identity.get("alias_choice_required")),
-                "question_template": fixed_workspace_alias_question(
-                    profile.get("machine_username")
-                ),
-            },
-            "defaults": {
-                "repo_topology": "keep-current",
-                "submodules": True,
-                "uv_sync": True,
-                "vllm_alignment": "ci-pinned",
-            },
-            "repo_topology": {
-                "required": False,
-                "options": ["keep-current", "recommended-fork-mode", "community-only"],
-            },
-            "submodules": {
-                "required": False,
-                "initialized": compact_submodules.get("all_initialized"),
-            },
-        },
+
     }
     return compact
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Repo-init probe with silent local UUID bootstrap")
+    parser = argparse.ArgumentParser(description="Read-only repo-init state probe")
     parser.add_argument(
         "--compact",
         action="store_true",
         help="print a compact summary instead of the full raw payload",
     )
+    parser.add_argument("--include-forks", action="store_true", help="query personal GitHub forks when topology setup needs them")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    ensure_workspace_identity()
     platform_info = detect_platform()
     root = git_root()
     gh_state = gh_login()
@@ -683,8 +614,6 @@ def main() -> None:
     payload: Dict[str, Any] = {
         "platform": platform_info,
         "tools": tool_state(),
-        "workspace_profile": profile_summary(),
-        "workspace_identity": workspace_identity_summary(),
         "gh": gh_state,
         "gh_install_plan": gh_install_plan(platform_info),
         "repo_root": str(root) if root else None,
@@ -701,7 +630,7 @@ def main() -> None:
         payload["submodules"] = []
         payload["repos"] = {}
 
-    if gh_state.get("logged_in") and user_login:
+    if args.include_forks and gh_state.get("logged_in") and user_login:
         payload["forks"] = gh_fork_info(user_login)
     else:
         payload["forks"] = {}

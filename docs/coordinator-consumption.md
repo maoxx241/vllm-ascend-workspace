@@ -12,7 +12,7 @@ See [target-state.md](target-state.md) and [dependency-plane.md](dependency-plan
 
 ## 1. Public actions
 
-Configure clients with `python3 .agents/scripts/vaws_client_setup.py`.
+Configure clients with `uv run --no-project python .agents/scripts/vaws_client_setup.py --client CLIENT --apply`.
 The native hook supplies `context_file`; never guess the task from cwd or
 history. For local Codex commands, the package can also resolve the actual
 `CODEX_THREAD_ID` when the hook did not export `VAWS_CONTEXT_FILE`. Conflicting
@@ -57,7 +57,7 @@ mapping without provenance requires explicit rebinding or per-run sources.
 The hook recognizes owner-accessible linked worktrees of the configured Git
 repository; it does not create worktrees or move the client's cwd. See
 [native workspace isolation](native-workspace-isolation.md) for current client
-and Windows/WSL boundaries and the remaining local environment proposal.
+and Windows/WSL boundaries.
 
 Device count defaults to zero. Ordinary commands and CPU compilation do not
 reserve NPUs or wait behind an NPU request. NPU workloads explicitly request
@@ -82,7 +82,6 @@ not a per-model launch snippet.
 |---|---|---|
 | `VAWS_AGENT_SESSIONS_DIR` | `<shared workspace>/.vaws-local/agent-sessions` | One local task registry directory for the package |
 | `VAWS_COORDINATOR_STATE_DIR` | unset; package default under `.vaws-local/coordinator` | Coordinator-owned pool and machine directory |
-| `VAWS_HOST_QUEUE_MODULE` | unset | Host NPU authority is the package module |
 
 There is no workspace `leases.json` and no `session.json` resource authority.
 
@@ -102,11 +101,11 @@ a state directory already owned through Windows IPC.
 
 ## 3. User container
 
-Each host has one persistent container `vaws-<user>` (example `vaws-maoxx241`).
+Each host has one persistent user container.
 Bootstrap, recipe execution, and runtime registration belong to the
 coordinator (`python -m vaws_coordinator provision --host ... --image ...
---user ...`). This workspace may store the configured username as project
-config; it does not create or delete that container from skills, and the
+--user ...`). Container-user configuration belongs to coordinator provisioning;
+business skills do not create or delete that container, and the
 launcher does not copy project `machine-inventory.json` over coordinator
 `machines.json`.
 

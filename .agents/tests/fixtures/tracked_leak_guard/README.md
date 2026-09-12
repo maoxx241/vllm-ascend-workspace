@@ -4,8 +4,9 @@
 `dirty.txt` deliberately contains one match per detection category so a
 regression in any rule fails a test instead of passing silently.
 
-Every value here is reserved by a standard and cannot name a real host, person,
-or credential:
+The corpus is synthetic. It combines documentation ranges with fabricated
+private-network examples and credential-shaped strings; none was collected
+from a real environment:
 
 - `192.168.x` / `10.x` — RFC 1918 private use, not routable on the internet
 - `fd00::/8` — RFC 4193 unique-local address space

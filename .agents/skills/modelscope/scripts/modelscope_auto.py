@@ -25,6 +25,8 @@ ensure_workspace_interpreter(repo_root=ROOT)
 
 
 import requests
+from _modelscope_common import file_signature
+from vaws_process_identity import process_identity, same_process
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -143,12 +145,25 @@ def pid_is_active(pid: int | None) -> bool:
 def read_pid(local_dir: Path) -> int | None:
     try:
         text = (local_dir / "download.pid").read_text(encoding="utf-8").strip()
-        return int(text) if text else None
+        value = json.loads(text) if text else None
+        pid = value.get("pid") if isinstance(value, dict) else value
+        return pid if isinstance(pid, int) and not isinstance(pid, bool) else None
     except (OSError, ValueError):
         return None
 
 
-def report_state(local_dir: Path) -> str:
+def worker_is_active(local_dir: Path, pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        record = json.loads((local_dir / "download.pid").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and same_process(pid, record.get("identity"))
+
+
+def report_state(local_dir: Path, *, model_id: str = "", revision: str = "",
+                 files: list[dict[str, Any]] | None = None) -> str:
     report_path = local_dir / "modelscope_sha256.report.json"
     if not report_path.exists():
         return "none"
@@ -156,11 +171,37 @@ def report_state(local_dir: Path) -> str:
         data = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return "invalid"
-    if data.get("all_ok") is True:
+    if not isinstance(data, dict) or not isinstance(data.get("checks"), list):
+        return "invalid"
+    checks = []
+    for check in data["checks"]:
+        if not isinstance(check, dict) or check.get("path") in DEFAULT_IGNORE_OFFICIAL:
+            continue
+        if check.get("model_id") != model_id:
+            continue
+        if not isinstance(check.get("local_dir"), str) or not isinstance(check.get("path"), str):
+            return "invalid"
+        if Path(check["local_dir"]).resolve() == local_dir.resolve():
+            checks.append(check)
+    if not checks or files is None:
+        return "stale"
+    by_path = {check.get("path"): check for check in checks}
+    if len(by_path) != len(checks) or set(by_path) != {info["Path"] for info in files}:
+        return "stale"
+    for info in files:
+        check = by_path[info["Path"]]
+        if (check.get("model_id") != model_id or check.get("revision") != revision
+                or Path(check.get("local_dir", "")).resolve() != local_dir.resolve()
+                or check.get("size_expected") != int(info.get("Size", 0))
+                or check.get("sha256_expected") != str(info.get("Sha256", "")).lower()
+                or "signature" not in check
+                or check["signature"] != file_signature(local_dir / info["Path"])):
+            return "stale"
+    if all(check.get("status") == "ok" for check in checks):
         return "ok"
     non_meta_failures = [
         check
-        for check in data.get("checks", [])
+        for check in checks
         if check.get("status") != "ok"
         and check.get("path") not in DEFAULT_IGNORE_OFFICIAL
     ]
@@ -172,10 +213,12 @@ def inspect_model(spec: ModelSpec, revision: str) -> dict[str, Any]:
     expected = sum(int(file_info.get("Size", 0)) for file_info in files)
     actual = local_size_for_files(spec.local_dir, files)
     pid = read_pid(spec.local_dir)
-    active = pid_is_active(pid)
+    active = worker_is_active(spec.local_dir, pid)
     percent = (actual / expected * 100) if expected else 0.0
-    complete = bool(expected and actual >= expected)
-    verification = report_state(spec.local_dir)
+    complete = bool(files) and all(
+        (signature := file_signature(spec.local_dir / info["Path"])) is not None
+        and signature[0] == int(info.get("Size", 0)) for info in files)
+    verification = report_state(spec.local_dir, model_id=spec.model_id, revision=revision, files=files)
     if active:
         state = "active"
     elif complete and verification == "ok":
@@ -265,7 +308,8 @@ def launch_worker(
             env=build_worker_env(args),
             **options,
         )
-    (spec.local_dir / "download.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+    record = {"pid": proc.pid, "identity": process_identity(proc.pid)}
+    (spec.local_dir / "download.pid").write_text(json.dumps(record) + "\n", encoding="utf-8")
     return proc.pid
 
 

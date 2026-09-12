@@ -44,7 +44,8 @@ def test_status_preserves_worker_and_resume_verification(tmp_path):
         return result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8")
     code, out, err = run("ensure")
     assert code == 0 and "download-started" in out, (out, err)
-    pid = int((local / "download.pid").read_text(encoding="utf-8"))
+    record = json.loads((local / "download.pid").read_text(encoding="utf-8"))
+    pid = record["pid"]
     sys.path.insert(0, str(ROOT / ".agents/lib"))
     from vaws_windows import pid_alive
     try:
@@ -52,7 +53,7 @@ def test_status_preserves_worker_and_resume_verification(tmp_path):
         assert code == 0 and "active" in out, (out, err)
         assert pid_alive(pid), "status terminated the running worker"
         code, out, err = run("ensure")
-        assert code == 0 and (local / "download.pid").read_text(encoding="utf-8").strip() == str(pid)
+        assert code == 0 and json.loads((local / "download.pid").read_text(encoding="utf-8"))["pid"] == pid
         deadline = time.monotonic() + 15
         while pid_alive(pid) and time.monotonic() < deadline:
             time.sleep(.1)
@@ -63,6 +64,8 @@ def test_status_preserves_worker_and_resume_verification(tmp_path):
         code, out, err = run("status")
         assert code == 0 and "verified" in out, (out, err)
         (local / "weights.bin").write_bytes(b"X" * len(data))
+        code, out, err = run("status")
+        assert code == 0 and "needs-verify" in out and "verify=stale" in out, (out, err)
         code, out, err = run("verify")
         assert code == 1 and "verify=failed" in out, (out, err)
         code, out, err = run("ensure")

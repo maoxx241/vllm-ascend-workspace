@@ -19,7 +19,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from vaws_remote_dev import ssh_exec  # noqa: E402
-from vaws_remote_target import SshEndpoint, ascend_env_preamble  # noqa: E402
+from vaws_remote_target import SshEndpoint, ascend_env_preamble, ssh_endpoint_from_mapping  # noqa: E402
 from vaws_result_envelope import PROGRESS_SENTINEL, progress as envelope_progress, unwrap_skill_payload  # noqa: E402
 from vaws_session_state import benchmark_dir  # noqa: E402
 from vaws_task_target import execution_target, task_client, task_id_of  # noqa: E402
@@ -75,7 +75,7 @@ def benchmark_runs_dir(config: "BenchConfig") -> Path:
     return benchmark_dir(task_id, ROOT) / "runs"
 
 
-def write_local_result(config: "BenchConfig", result: dict[str, Any]) -> Path:
+def write_local_result(config: "BenchConfig", result: dict[str, Any], *, path: Path | None = None) -> Path:
     runs_dir = benchmark_runs_dir(config)
     runs_dir.mkdir(parents=True, exist_ok=True)
     target_token = safe_token(config.task_id or "benchmark")
@@ -83,7 +83,7 @@ def write_local_result(config: "BenchConfig", result: dict[str, Any]) -> Path:
         f"{now_utc().replace(':', '-')}_{target_token}_"
         f"{os.getpid()}_{uuid.uuid4().hex[:8]}.json"
     )
-    result_path = runs_dir / filename
+    result_path = path or runs_dir / filename
     result["result_path"] = str(result_path)
     result["run_dir"] = str(runs_dir)
     result_path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -503,7 +503,7 @@ def assemble_config(
         cfg.health_timeout = int(preset_dict["health_timeout"])
 
     # --- Serve args: user provided overrides preset, preset overrides nightly ---
-    if serve_args:
+    if serve_args is not None:
         cfg.serve_args = list(serve_args)
     elif preset_dict and _preset_list(preset_dict, "serve_args") is not None:
         cfg.serve_args = _preset_list(preset_dict, "serve_args") or []
@@ -521,7 +521,7 @@ def assemble_config(
         cfg.serve_args = filtered
 
     # --- Bench args: user provided overrides preset, preset overrides nightly ---
-    if bench_args:
+    if bench_args is not None:
         cfg.bench_args = list(bench_args)
     elif preset_dict and _preset_list(preset_dict, "bench_args") is not None:
         cfg.bench_args = _preset_list(preset_dict, "bench_args") or []
@@ -659,10 +659,11 @@ def ssh_run_script(
     script: str,
     *,
     timeout: int = 300,
+    endpoint: SshEndpoint | None = None,
 ) -> subprocess.CompletedProcess:
     """Run an arbitrary bash script inside the session container over SSH."""
     return ssh_exec(
-        SshEndpoint(host=container_ip, port=container_port, user="root"),
+        endpoint or SshEndpoint(host=container_ip, port=container_port, user="root"),
         script,
         check=False,
         timeout=timeout,
@@ -727,7 +728,7 @@ def run_bench_on_remote(
 
     emit_progress("bench_run", f"running vllm bench serve on {target_token}")
     proc = ssh_exec(
-        SshEndpoint(host=container_ip, port=container_port, user="root"),
+        ssh_endpoint_from_mapping(target["endpoint"]),
         remote_script,
         check=False,
         timeout=1200,
@@ -883,6 +884,7 @@ def prepare_fixed_request_dataset(
     prompt: str | None = None,
     env_preamble: str = "",
     python: str = "python3",
+    endpoint: SshEndpoint | None = None,
 ) -> dict[str, Any]:
     """Generate a custom JSONL dataset of identical fixed-length requests.
 
@@ -916,7 +918,7 @@ def prepare_fixed_request_dataset(
         + _FIXED_DATASET_REMOTE_PY
         + "\nPY\n"
     )
-    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=600)
+    proc = ssh_run_script(container_ip, container_port, remote_script, timeout=600, endpoint=endpoint)
     if proc.returncode != 0:
         raise RuntimeError(
             "fixed request dataset preparation failed "

@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -56,7 +57,46 @@ def _spec(tmp: str, model_id: str = "org/name") -> auto.ModelSpec:
     return auto.ModelSpec(model_id=model_id, local_dir=Path(tmp) / "org" / "name")
 
 
+def write_report(spec, files, revision="master"):
+    with mock.patch.object(verify, "fetch_official_files", return_value=files):
+        checks, summary = verify.verify_model(spec, revision, 4096, set(), {".gitattributes"})
+    verify.write_outputs(spec.local_dir, "modelscope_sha256", checks, [summary])
+    return checks
+
+
 class ArgumentValidationTests(unittest.TestCase):
+    def test_live_unrelated_or_reused_pid_is_not_an_active_download(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = _spec(tmp)
+            spec.local_dir.mkdir(parents=True)
+            pidfile = spec.local_dir / "download.pid"
+            identity = auto.process_identity(os.getpid())
+            self.assertIsNotNone(identity)
+            for record in (os.getpid(), {"pid": os.getpid(), "identity": {**identity, "started": "other"}}):
+                pidfile.write_text(json.dumps(record), encoding="utf-8")
+                with mock.patch.object(auto, "fetch_official_files", return_value=OFFICIAL[:2]):
+                    self.assertEqual(auto.inspect_model(spec, "master")["state"], "needs-download")
+            pidfile.write_text(json.dumps({"pid": os.getpid(), "identity": identity}), encoding="utf-8")
+            self.assertTrue(auto.worker_is_active(spec.local_dir, os.getpid()))
+
+    def test_aggregate_report_filters_model_and_directory_and_rejects_null(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = _spec(tmp)
+            spec.local_dir.mkdir(parents=True)
+            (spec.local_dir / "config.json").write_bytes(b"hello")
+            (spec.local_dir / "weights.bin").write_bytes(b"abc")
+            write_report(spec, OFFICIAL[:2])
+            path = spec.local_dir / "modelscope_sha256.report.json"
+            report = json.loads(path.read_text(encoding="utf-8"))
+            report["checks"].append({**report["checks"][0], "model_id": "other/model", "status": "mismatch"})
+            report["checks"].append({**report["checks"][0], "local_dir": str(Path(tmp) / "elsewhere")})
+            report["all_ok"] = False
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(auto.report_state(spec.local_dir, model_id=spec.model_id, revision="master", files=OFFICIAL[:2]), "ok")
+            report["checks"][0]["local_dir"] = None
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(auto.report_state(spec.local_dir, model_id=spec.model_id, revision="master", files=OFFICIAL[:2]), "invalid")
+
     def test_parse_model_spec_requires_namespace_and_local_dir(self) -> None:
         spec = auto.parse_model_spec("org/name=/tmp/weights")
         self.assertEqual(spec.model_id, "org/name")
@@ -135,7 +175,7 @@ class StatusAndResumeTests(unittest.TestCase):
             (local / "modelscope_sha256.report.json").write_text(
                 json.dumps({"all_ok": True, "checks": []}), encoding="utf-8"
             )
-            self.assertEqual(auto.report_state(local), "ok")
+            self.assertEqual(auto.report_state(local), "stale")
             (local / "modelscope_sha256.report.json").write_text(
                 json.dumps(
                     {
@@ -155,7 +195,7 @@ class StatusAndResumeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assertEqual(auto.report_state(local), "failed")
+            self.assertEqual(auto.report_state(local), "stale")
 
     def test_inspect_model_state_machine_uses_local_dir_only(self) -> None:
         blobs = [item for item in OFFICIAL if item["Path"] != ".gitattributes"]
@@ -171,15 +211,13 @@ class StatusAndResumeTests(unittest.TestCase):
                 complete = auto.inspect_model(spec, "master")
                 self.assertEqual(complete["state"], "needs-verify")
                 self.assertTrue(complete["complete"])
-                (spec.local_dir / "modelscope_sha256.report.json").write_text(
-                    json.dumps({"all_ok": True, "checks": []}), encoding="utf-8"
-                )
+                write_report(spec, blobs)
                 verified = auto.inspect_model(spec, "master")
                 self.assertEqual(verified["state"], "verified")
             (spec.local_dir / "weights.bin").unlink()
             with (
                 mock.patch.object(auto, "fetch_official_files", return_value=blobs),
-                mock.patch.object(auto, "pid_is_active", return_value=True),
+                mock.patch.object(auto, "worker_is_active", return_value=True),
                 mock.patch.object(auto, "read_pid", return_value=4242),
             ):
                 active = auto.inspect_model(spec, "master")
@@ -191,6 +229,48 @@ class StatusAndResumeTests(unittest.TestCase):
             ):
                 missing = auto.inspect_model(spec, "master")
             self.assertEqual(missing["state"], "needs-download")
+
+    def test_complete_requires_each_file_and_verification_expires_on_changes(self) -> None:
+        blobs = [item for item in OFFICIAL if item["Path"] != ".gitattributes"]
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = _spec(tmp)
+            spec.local_dir.mkdir(parents=True)
+            (spec.local_dir / "config.json").write_bytes(b"12345678")
+            with mock.patch.object(auto, "fetch_official_files", return_value=blobs):
+                observed = auto.inspect_model(spec, "master")
+                self.assertEqual(observed["actual"], observed["expected"])
+                self.assertFalse(observed["complete"])
+            (spec.local_dir / "config.json").write_bytes(b"hello")
+            weights = spec.local_dir / "weights.bin"
+            weights.write_bytes(b"abc")
+            write_report(spec, blobs)
+            def observed(revision="master", files=blobs):
+                return auto.report_state(spec.local_dir, model_id=spec.model_id, revision=revision, files=files)
+            self.assertEqual(observed(), "ok")
+            self.assertEqual(observed("other-revision"), "stale")
+            self.assertEqual(observed(files=[{**item, "Sha256": "new-upstream-hash"} for item in blobs]), "stale")
+            self.assertEqual(auto.report_state(spec.local_dir, model_id="different/repo", revision="master", files=blobs), "stale")
+            before = weights.stat()
+            weights.write_bytes(b"abd")
+            os.utime(weights, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            self.assertEqual(observed(), "stale")
+            write_report(spec, blobs)
+            self.assertEqual(observed(), "failed")
+            weights.unlink()
+            self.assertEqual(observed(), "stale")
+
+    def test_auto_install_uses_isolated_uv_without_modifying_selected_python(self) -> None:
+        with mock.patch.object(download.importlib.util, "find_spec", return_value=None), \
+                mock.patch.object(download.shutil, "which", return_value="uv"), \
+                mock.patch.object(download.subprocess, "call", return_value=7) as launch, \
+                mock.patch.object(sys, "argv", ["download_from_modelscope.py", "--auto-install", "--model-id", "org/name", "--local-dir", "weights with spaces"]):
+            with self.assertRaises(SystemExit) as stopped:
+                download.ensure_modelscope(True)
+        self.assertEqual(stopped.exception.code, 7)
+        command = launch.call_args.args[0]
+        self.assertEqual(command[:6], ["uv", "run", "--no-project", "--with", "modelscope", "python"])
+        self.assertNotIn("--auto-install", command)
+        self.assertEqual(command[-1], "weights with spaces")
 
     def test_command_ensure_launches_download_or_verify_or_stops(self) -> None:
         spec = auto.ModelSpec("org/name", Path("/tmp/org/name"))
@@ -268,6 +348,23 @@ class StatusAndResumeTests(unittest.TestCase):
 
 
 class Sha256DecisionTests(unittest.TestCase):
+    def test_hashing_does_not_publish_success_when_file_changes_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = verify.ModelSpec("org/name", Path(tmp))
+            path = spec.local_dir / "weights.bin"
+            path.write_bytes(b"abc")
+            original = verify.sha256_file
+            def race(path, chunk_size):
+                digest = original(path, chunk_size)
+                before = path.stat()
+                path.write_bytes(b"abd")
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+                return digest
+            with mock.patch.object(verify, "sha256_file", side_effect=race):
+                checks = write_report(spec, [OFFICIAL[1]])
+            self.assertEqual(checks[0].status, "changed_during_verification")
+            self.assertFalse(json.loads((spec.local_dir / "modelscope_sha256.report.json").read_text(encoding="utf-8"))["all_ok"])
+
     def test_verify_model_classifies_missing_size_hash_and_ok(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             spec = verify.ModelSpec("org/name", Path(tmp))

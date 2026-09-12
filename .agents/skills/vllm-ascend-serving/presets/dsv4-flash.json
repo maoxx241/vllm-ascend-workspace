@@ -1,6 +1,5 @@
 {
-  "description": "DeepSeek-V4-Flash W4A8 MTP serving recipe, verified end-to-end on an A3 nightly CANN 9.1 / vllm 0.26.0 image (2026-08-29, tp8 on 8 NPUs). The model weight path is machine-specific and stays a required CLI arg. Preflight hard-fails on any other vllm version: copy this preset, adjust, and re-verify instead of drifting.",
-  "vllm_version": "0.26.0",
+  "description": "DeepSeek-V4-Flash W4A8 MTP serving options from an A3 CANN 9.1 / vllm 0.26.0 run (2026-08-29, tp8). Select compatible business options for the requested runtime. Source paths and installed version come from the coordinator environment.",
   "tp": 8,
   "dp": 1,
   "port": 30001,
@@ -8,8 +7,6 @@
   "served_model_name": "dsv4-w4a8",
   "health_timeout": 1200,
   "env": {
-    "PYTHONPATH": "/vllm-workspace/vllm:/vllm-workspace/vllm-ascend:/usr/local/Ascend/cann-9.1.0/python/site-packages:/usr/local/Ascend/cann-9.1.0/opp/built-in/op_impl/ai_core/tbe",
-    "VLLM_VERSION": "0.26.0",
     "OMP_PROC_BIND": "false",
     "OMP_NUM_THREADS": "10",
     "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",

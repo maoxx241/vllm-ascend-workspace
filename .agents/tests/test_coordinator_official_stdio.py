@@ -1,6 +1,6 @@
 """Official MCP SDK against the consumed task server subprocess.
 
-Local-only: no manager, no remote-dev, no network. The launcher execs the
+Local-only: no manager, no remote transport, no network. The launcher execs the
 installed vaws-coordinator package. Skip when the official SDK or the
 package is missing; this file does not install dependencies.
 """

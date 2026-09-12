@@ -1,68 +1,68 @@
-# 实机开发反馈优化设计
+# Runtime progress and diagnostics
 
 Status: current
 
-2026-09-11。本文规定本轮实现目标。依据是两组 TP=2 实机服务验收中实际遇到的准备黑盒、版本残留、状态脱节、重复输出和连接误诊。
+A status result should show the current operation, recent progress, loaded
+runtime identity, waiting/failure evidence and where to read more. Owners
+maintain these facts; Agents do not reconstruct management records.
 
-## 1. 目标和约束
+## Ownership and observations
 
-一次状态查询应能回答：正在做什么、最近是否有进展、正在使用哪个版本、为什么等待或失败、去哪里读取证据。Agent 不维护这些事实，不重复填写计划或 manifest。
+Coordinator owns execution state, role progress and resource release. Remote-dev
+owns connection/process observations and remote results. Business skills add
+HTTP readiness, inference checks and measurement outcomes. Knowledge and fleet
+observation do not supervise executions.
 
-沿用 coordinator 的执行状态与现有 remote-dev result 格式。进展和健康是观察字段，不增加一个调度状态机。业务成功、进程终态与资源释放分别表达：停止一个完成验收的服务可以是 execution cancelled、业务验收 passed、资源 released。没有 passed smoke 的停止只完成为 inconclusive。
+Process state, business readiness and resource release are distinct. A running
+process may still be loading; a stopped process does not by itself prove resource
+release or a successful business check. Reports retain the observations actually
+made, and do not move a completed record backwards when an older observation arrives.
 
-本轮覆盖五项体验问题以及当前 CLI 参数检查。保留通用命令和直接 endpoint 操作，不引入统一工作流引擎，不修改用户全局 SSH、代理或客户端设置。
+Preparation, source publication and build steps retain progress and original
+stdout/stderr references. Reading a preparing execution does not wait for its
+build or restart it. A quiet log alone does not establish a deadlock. Errors keep
+the original category and message; uncertain attribution remains unknown.
 
-## 2. 所有权
+## Runtime identity and updates
 
-| Owner | 本轮责任 |
-|---|---|
-| remote-dev | SSH 实际连接方式、超时/退出诊断、只读连接对照探测；通用 HTTP 代理策略与诊断辅助函数 |
-| coordinator | 准备/同步进展和日志引用，角色错误与释放事实，daemon 加载版本、安装版本与安全重启入口；task MCP/CLI 紧凑输出 |
-| workspace | doctor 展示包运行信息；服务健康和 smoke；将已观察执行事实同步到业务记录和 Run Manifest；当前 serving CLI 的参数预检 |
-| knowledge / top | 本轮不增加调度、恢复或状态所有权 |
+A process records the package version, available Git commit, Python path and PID
+it loaded. Later installed metadata is a separate observation. Doctor and daemon
+status distinguish those identities; an updated installation does not imply a
+running process reloaded it.
 
-## 3. 进展和错误
+Observation and cleanup remain available during version drift. Coordinator's
+restart-if-idle operation checks active execution and resource state itself.
+Native clients own MCP process restarts. Updating a runtime does not justify
+killing a shared SSH master or guessing which unrelated PID should stop.
 
-准备阶段复用现有安装步骤与 progress 事件，向 execution 记录当前步骤、角色、开始时间、最近事件时间、简短进展及完整日志引用。源码同步也保存 stdout/stderr，不把完整错误截断后丢弃。长编译保留已有周期性事件，不能把没有输出直接判断为死锁。
+## Business requests
 
-状态响应增加 `progress` 和观察时间。准备中的查询立即读取缓存，不等待编译。准备前后、同步前后、分配和启动阶段都应有明确步骤。每个角色暴露其错误、lease_state、quiet/descendants_drained；终态不自动等于资源已释放。
+Readiness checks expose the actual target, proxy mode and failure category.
+Internal service requests use explicit direct connections; callers can select
+environment proxy use for destinations that require it. These choices do not
+change global proxy settings. A health-check failure does not replay a generation
+request or prove a model defect.
 
-错误保留原始类别、消息和日志引用。有连接层的直接证据才归因连接；无法判定时明确 unknown。自动恢复不重复任意业务命令，不根据一段错误文本终止他人进程。
+Where a serving tool validates engine arguments, it runs the current remote CLI's
+parser in the selected environment before loading weights. It does not maintain
+a stale local whitelist of vLLM flags. The owning tool retains the original error.
 
-## 4. 运行版本与更新
+## Compact results and readback
 
-进程启动时固定记录 package version、来源 Git commit（可获得时）、Python 路径和 PID。后续读取磁盘安装信息，不能把新 metadata 当作旧进程已加载的版本。
+Python APIs retain complete records. Agent-facing task MCP/CLI responses offer a
+compact view and the full record reference; explicit full/target/tail operations
+expose detail when needed. Omitted arrays retain counts, and truncated logs keep
+readable references. Error evidence has priority over repeated environment data.
+A failed record write is reported without inventing a reference or hiding the
+operation result.
 
-coordinator ping/status 返回进程加载与磁盘安装信息；MCP 返回自身信息。版本不一致可继续观察和停止已拥有的执行，并提供明确重启入口。重启由 daemon 自身检查正在准备/推进的执行与未释放租约，只在空闲时退出；不通过猜 PID 或杀共享 SSH master 修复。
+SSH diagnostics retain effective connection settings, timeout budget, duration,
+exit and uncertainty about remote completion. A timeout does not prove the remote
+command never ran. Read-only connection probes can compare connection modes;
+they never replay the original business command. Proxy credentials remain out of
+summaries and records.
 
-缺失来源提交记 unknown。身份是观测信息，不生成新的兼容性文件，不阻止普通本地工作。旧服务未报告加载信息时如实说明，不能声称已自动更新。MCP 由原生客户端重启，工具不能自行重连宿主。
-
-## 5. 一次启动，观察推进记录
-
-保留 execution 作为事实权威。PD `status` 将观察结果同步到本地业务 state 和 manifest，queued→running 不需要再次 start。状态查询可重复，已终结的 manifest 不因旧观察倒退。
-
-就绪度独立为 unknown/starting/ready/unhealthy：进程 running 不意味着 HTTP 已就绪。进程仍在初始化时，连接尚未监听不是工具损坏。已终止执行不再探测代理健康。停止中的执行显示 stopping 并保留未完成的业务记录；终态和资源释放证据齐全后完成记录。
-
-健康/推理请求给出实际访问目标、代理模式和失败类别。内部服务请求使用显式直连；需要代理的地址仍可显式选用环境代理。不得修改全局代理环境。正常健康检查失败不自动重发生成请求。
-
-当前 CLI 参数检查由业务命令生成器提供 `preflight`，在选中的远端 Python/代码环境中运行，只检查命令解析，不加载权重，不要求预先分配 NPU；检查失败保留当前 CLI 的原始错误。不维护易失效的 vLLM 参数白名单，保留 Agent 使用新参数的能力。
-
-## 6. 紧凑输出和回读
-
-Python 库保持完整机器记录；Agent 面向的 task MCP/CLI 默认紧凑投影，提供 `full`/`--full`。完整结果由 coordinator 保存，返回 `record_ref`，本地原生读取可回读。stdout/stderr/log refs 保持可定位。
-
-默认突出 execution/task 引用、状态、步骤、角色摘要、错误、释放状态、版本提醒和下一步。省去重复 launch_env、整段 launch_preamble、历史 execution 详情和多份相同日志。tail 保留有用尾部与完整引用；target 明确请求时返回可执行所需 endpoint/Python 信息。
-
-默认返回设置可测试的大小上限（常规单角色约 8 KiB，多角色默认摘要不超过 16 KiB），数组限量时返回总数与省略数。错误与日志引用优先于普通环境详情。记录写入失败必须提示，不返回不存在的 record_ref，也不能抹掉已发生的操作结果。
-
-## 7. 连接诊断
-
-SSH 返回有效 mux/独立连接设置、超时预算、耗时、退出码与是否能确认远端执行结果。超时不等于远端命令从未运行。对照诊断只执行包内固定只读探针，可比较默认连接与独立连接，不能重放原始 shell。
-
-HTTP 返回代理模式、HTTP 状态/连接错误；不把 502 直接归为模型故障。代理 URL 中的认证信息不得进入摘要或记录。关闭共享 mux/绕过代理只针对本次显式请求，不修改机器全局配置。
-
-## 8. 验收
-
-以实际问题为边界，受影响测试通过后跑一次各仓库最终 CI。必要的测试：准备阶段可见且并发 status 不阻塞；原始失败有日志；旧进程加载身份不随磁盘 metadata 改变；忙碌 daemon 拒绝重启；queued→running→stop 的 manifest 无重复 start、无倒退；完整记录可回读且默认输出有界；SSH 诊断不重放业务命令；HTTP 代理策略与错误区分；CLI 参数解析失败发生在模型启动前。
-
-实机验收复用准备好的根目录：一轮真实服务启动、健康、短请求、停止，记录版本、进展、状态与释放事实。另用无副作用的连接探针验证 SSH 路径。长编译进展通过受控输出/失败夹具验证接线；不为观察字段重编全部算子。Windows/PowerShell 未实测的路径明确列为未验证，不以 macOS 结果替代。
+Affected behavior is checked in the owning package or business suite. Reuse
+existing machine evidence when it still applies; the ordinary [local test
+runner](local-tests.md) handles control-plane checks without a mandatory hardware
+or full-rebuild sequence.

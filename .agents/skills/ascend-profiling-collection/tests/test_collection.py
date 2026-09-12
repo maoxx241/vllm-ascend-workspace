@@ -66,7 +66,7 @@ class ImageEncodingTests(unittest.TestCase):
         import base64
         from PIL import Image
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "图片 source.png"
+            path = Path(temp) / "鍥剧墖 source.png"
             Image.new("RGBA", (8, 4), (200, 30, 20, 128)).save(path)
             before = path.read_bytes()
             url, metadata = collect._build_image_data_url(path, 12)
@@ -82,6 +82,28 @@ class ImageEncodingTests(unittest.TestCase):
             collect._build_image_data_url(Path("missing.png"), 0)
 
 
+class AnalyseEvidenceTests(unittest.TestCase):
+    def test_both_export_requires_nonempty_database(self):
+        analyse = sys.modules["run_remote_analyse"]
+        with tempfile.TemporaryDirectory() as temp:
+            rank = Path(temp) / "rank_ascend_pt"
+            output = rank / analyse.ASCEND_OUTPUT_DIRNAME
+            output.mkdir(parents=True)
+            (output / "kernel_details.csv").write_text("header\n", encoding="utf-8")
+            (output / "trace_view.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(analyse.classify_status(analyse.verify_outputs_local(rank, "text")), "ok")
+            self.assertEqual(analyse.classify_status(analyse.verify_outputs_local(rank, "both")), "partial")
+            (output / "ascend_pytorch_profiler_0_1.db").write_bytes(b"data")
+            self.assertEqual(analyse.classify_status(analyse.verify_outputs_local(rank, "both")), "ok")
+
+    def test_analyse_uses_managed_interpreter_and_preamble(self):
+        analyse = sys.modules["run_remote_analyse"]
+        script = analyse.build_parallel_analyse_script(["/trace/rank_ascend_pt"], parallelism=1, timeout_s=20,
+            python="/managed env/bin/python", preamble="export MANAGED_ENV=1")
+        self.assertIn("'/managed env/bin/python' -c", script)
+        self.assertIn("export MANAGED_ENV=1", script)
+
+
 def fake_endpoint():
     return common.SshEndpoint(host="192.0.2.10", port=46001, user="root")
 
@@ -94,6 +116,7 @@ def fake_target(*, alias: str = "machine-a", session_id: str = "sess-a"):
         cwd="/vllm-workspace",
         session_id=session_id,
         task_id=session_id,
+        service_port=8000,
     )
 
 
@@ -164,6 +187,12 @@ class ProfileControlTests(unittest.TestCase):
     def test_post_remote_action_rejects_unknown_action(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported action"):
             profile_control.post_remote_action(fake_endpoint(), 8000, "pause_profile", 10)
+
+    def test_missing_or_failed_http_payload_cannot_report_success(self) -> None:
+        for stdout in ("", "not-json", "[]", '{"ok":false,"status":500}', '{"ok":true,"status":false}'):
+            with self.subTest(stdout=stdout), mock.patch.object(profile_control, "ssh_exec", return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr="")):
+                with self.assertRaisesRegex(RuntimeError, "no confirmed HTTP success"):
+                    profile_control.post_remote_action(fake_endpoint(), 8000, "start_profile", 10)
 
     def test_post_remote_action_posts_start_and_stop_paths(self) -> None:
         seen: list[str] = []
@@ -252,6 +281,21 @@ class CollectionOrchestrationTests(unittest.TestCase):
             self.assertEqual(manifest["request_tunnel"]["base_url"], "http://127.0.0.1:39999")
             self.assertEqual(manifest["workload_status"]["status"], "ok")
             self.assertEqual(manifest["analysis_status"], "ok")
+
+    def test_workload_failure_closes_existing_profile_window_without_stopping_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            controls, stop_service = mock.Mock(return_value={"ok": True, "status": 200}), mock.Mock()
+            with _patch_collection(run_dir, post_remote_action=controls, call_serve_stop=stop_service,
+                                   _run_benchmark_wave=mock.Mock(side_effect=RuntimeError("workload interrupted"))):
+                rc = collect.main(collect_argv(tmp, **{"--execution-id": "live-owned-execution"}))
+            self.assertEqual(rc, 1)
+            self.assertEqual([call.args[2] for call in controls.call_args_list], ["start_profile", "stop_profile"])
+            stop_service.assert_not_called()
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["task_id"], "sess-a")
+            self.assertEqual(manifest["service_result"]["status"], "existing")
 
     def test_tunnel_death_writes_failed_manifest_and_never_returns_zero(self) -> None:
         @contextlib.contextmanager

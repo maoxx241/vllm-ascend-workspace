@@ -5,9 +5,12 @@ import importlib.util
 import io
 import json
 import os
+import socket
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -151,6 +154,41 @@ class EnvironmentTests(unittest.TestCase):
 
 
 class PidfileTests(unittest.TestCase):
+    def test_darwin_zombie_is_dead_even_when_signal_zero_would_succeed(self) -> None:
+        for state, expected in (("Z", False), ("Z+", False), ("S+", True)):
+            with self.subTest(state=state), mock.patch.object(MODULE.os, "name", "posix"), \
+                 mock.patch.object(MODULE.sys, "platform", "darwin"), \
+                 mock.patch.object(MODULE.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, state + "\n", "")), \
+                 mock.patch.object(MODULE.os, "kill") as probe:
+                self.assertEqual(MODULE.pid_alive(42), expected)
+                if expected:
+                    probe.assert_called_once_with(42, 0)
+                else:
+                    probe.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "native POSIX zombie regression")
+    def test_native_ps_branch_identifies_unreaped_child_without_proc(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            with mock.patch.object(MODULE.sys, "platform", "darwin"):
+                deadline = time.monotonic() + 5
+                while MODULE.pid_alive(child.pid) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertFalse(MODULE.pid_alive(child.pid))
+            # The kernel still knows the PID until this parent reaps it.
+            os.kill(child.pid, 0)
+        finally:
+            child.wait(timeout=5)
+
+    def test_darwin_identity_uses_native_birth_time_and_complete_command(self) -> None:
+        import vaws_process_identity as identity
+        result = subprocess.CompletedProcess([], 0, "S Sat Sep 12 10:20:30 2026 /path with spaces/python worker\n", "")
+        with mock.patch.object(identity.os, "name", "posix"), mock.patch.object(identity.sys, "platform", "darwin"), \
+             mock.patch.object(identity.subprocess, "run", return_value=result) as run:
+            self.assertEqual(identity.process_identity(42), {"started": "Sat Sep 12 10:20:30 2026",
+                             "command": "/path with spaces/python worker"})
+        self.assertIn("-ww", run.call_args.args[0])
+
     def test_read_pidfile_rejects_missing_or_malformed(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "serve.json"
@@ -208,6 +246,17 @@ class DeployTests(unittest.TestCase):
 
 
 class StartTests(unittest.TestCase):
+    def test_start_rejects_an_existing_listener_without_claiming_its_health(self):
+        with socket.socket() as listener, tempfile.TemporaryDirectory() as tmp:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            with mock.patch.object(MODULE, "start_process") as start, mock.patch.object(MODULE, "health") as health:
+                result = MODULE.do_start(namespace(port=listener.getsockname()[1]), Path(tmp), "SPEC")
+            self.assertFalse(result["ok"])
+            self.assertIn("already listening", result["detail"])
+            start.assert_not_called()
+            health.assert_not_called()
+
     def test_start_writes_pidfile_and_waits_for_health(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             base = Path(root) / "monitor"
@@ -216,7 +265,8 @@ class StartTests(unittest.TestCase):
                 MODULE, "start_process", return_value=fake
             ) as start_process, mock.patch.object(
                 MODULE, "health", return_value=(True, {"status": "ok"}, None)
-            ) as health:
+            ) as health, mock.patch.object(MODULE, "process_identity", return_value={"started": "1", "command": "uvx vaws-top"}), \
+                 mock.patch.object(MODULE, "port_is_listening", return_value=False):
                 result = MODULE.do_start(namespace(port=8790), base, "SPEC")
             command = start_process.call_args.args[0]
             env = start_process.call_args.kwargs["env"]
@@ -237,7 +287,8 @@ class StartTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)
             (base / MODULE.PIDFILE_NAME).write_text(
-                json.dumps({"pid": os.getpid(), "port": 8791, "spec": "RUNNING"}), encoding="utf-8"
+                json.dumps({"pid": os.getpid(), "port": 8791, "spec": "RUNNING",
+                            "identity": MODULE.process_identity(os.getpid())}), encoding="utf-8"
             )
             with mock.patch.object(MODULE, "start_process") as start_process, mock.patch.object(
                 MODULE, "health", return_value=(True, {"status": "ok"}, None)
@@ -257,7 +308,8 @@ class StartTests(unittest.TestCase):
             fake = FakeProcess(pid=4243, returncode=1)
             with mock.patch.object(MODULE, "require_uvx", return_value="/usr/bin/uvx"), mock.patch.object(
                 MODULE, "start_process", return_value=fake
-            ), mock.patch.object(MODULE, "health", return_value=(False, None, "refused")):
+            ), mock.patch.object(MODULE, "health", return_value=(False, None, "refused")), \
+                 mock.patch.object(MODULE, "port_is_listening", return_value=False):
                 result = MODULE.do_start(namespace(), base, "SPEC")
             self.assertFalse(result["ok"])
             self.assertEqual(result["exit_code"], 1)
@@ -265,12 +317,36 @@ class StartTests(unittest.TestCase):
             self.assertFalse((base / MODULE.PIDFILE_NAME).exists())
 
     def test_start_requires_uvx(self) -> None:
-        with tempfile.TemporaryDirectory() as root, mock.patch.object(MODULE.shutil, "which", return_value=None):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(MODULE.shutil, "which", return_value=None), \
+             mock.patch.object(MODULE, "port_is_listening", return_value=False):
             with self.assertRaisesRegex(MODULE.MonitorError, "uvx is not on PATH"):
                 MODULE.do_start(namespace(), Path(root), "SPEC")
 
 
 class StopAndStatusTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX group termination regression")
+    def test_leader_exit_with_term_ignoring_child_is_reported_as_remaining_group(self):
+        child_code = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(60)"
+        parent_code = ("import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c'," + repr(child_code) +
+                       "],stdout=subprocess.PIPE,text=True); p.stdout.readline(); print(p.pid,flush=True); time.sleep(60)")
+        parent = subprocess.Popen([sys.executable, "-c", parent_code], stdout=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        child_pid = int(parent.stdout.readline())
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                record = {"pid": parent.pid, "identity": MODULE.process_identity(parent.pid)}
+                (base / MODULE.PIDFILE_NAME).write_text(json.dumps(record), encoding="utf-8")
+                result = MODULE.do_stop(base, timeout=0.5)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["group_remaining"])
+                self.assertTrue((base / MODULE.PIDFILE_NAME).exists())
+                self.assertTrue(MODULE.pid_alive(child_pid))
+        finally:
+            os.kill(child_pid, signal.SIGKILL)
+            parent.wait(timeout=5)
+            parent.stdout.close()
+
     def test_stop_without_pidfile_is_a_noop(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             result = MODULE.do_stop(Path(root))
@@ -301,7 +377,8 @@ class StopAndStatusTests(unittest.TestCase):
             self.assertTrue(MODULE.pid_alive(pid))
             with tempfile.TemporaryDirectory() as root:
                 base = Path(root)
-                (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": pid, "port": 8788}), encoding="utf-8")
+                (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": pid, "port": 8788,
+                    "identity": MODULE.process_identity(pid)}), encoding="utf-8")
                 with redirect_stderr(io.StringIO()):
                     result = MODULE.do_stop(base, timeout=5)
                 self.assertFalse((base / MODULE.PIDFILE_NAME).exists())
@@ -315,7 +392,8 @@ class StopAndStatusTests(unittest.TestCase):
     def test_status_prefers_the_recorded_port(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             base = Path(root)
-            (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": os.getpid(), "port": 8795}), encoding="utf-8")
+            (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": os.getpid(), "port": 8795,
+                "identity": MODULE.process_identity(os.getpid())}), encoding="utf-8")
             with mock.patch.object(MODULE, "health", return_value=(True, {"status": "ok"}, None)) as health:
                 result = MODULE.do_status(base, 8788)
             self.assertEqual(health.call_args.args[0], 8795)
@@ -326,6 +404,24 @@ class StopAndStatusTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertFalse(result["running"])
             self.assertIsNone(result["pid"])
+
+    def test_reused_or_legacy_pid_never_reuses_or_stops_unrelated_process(self) -> None:
+        identity = MODULE.process_identity(os.getpid())
+        self.assertIsNotNone(identity)
+        for bad in (None, {**identity, "started": "another birth"}, {**identity, "command": "another command"}):
+            with self.subTest(identity=bad), tempfile.TemporaryDirectory() as root:
+                base = Path(root)
+                (base / MODULE.PIDFILE_NAME).write_text(json.dumps({"pid": os.getpid(), "identity": bad}), encoding="utf-8")
+                with mock.patch.object(MODULE, "_stop_group") as stop, mock.patch.object(MODULE, "start_process") as start, \
+                     mock.patch.object(MODULE, "health", return_value=(True, {"status": "ok"}, None)), \
+                     mock.patch.object(MODULE, "runtime_dir", return_value=base), redirect_stdout(io.StringIO()):
+                    self.assertFalse(MODULE.do_start(namespace(), base, "SPEC")["ok"])
+                    self.assertFalse(MODULE.do_status(base, 8788)["running"])
+                    self.assertFalse(MODULE.do_stop(base)["ok"])
+                    self.assertEqual(MODULE.main(["restart"]), 1)
+                stop.assert_not_called()
+                start.assert_not_called()
+                self.assertTrue(MODULE.pid_alive(os.getpid()))
 
 
 class PayloadAndMainTests(unittest.TestCase):

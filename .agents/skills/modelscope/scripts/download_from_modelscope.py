@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -106,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--auto-install",
         action="store_true",
-        help="Install/upgrade modelscope with pip if it is missing.",
+        help="Resolve missing modelscope in an isolated uv environment for this download.",
     )
     return parser.parse_args()
 
@@ -136,8 +137,14 @@ def ensure_modelscope(auto_install: bool) -> None:
             "modelscope is not installed. Install it first or pass --auto-install."
         )
 
-    print("modelscope package not found; installing/upgrading with pip...", flush=True)
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "modelscope"])
+    uv = shutil.which("uv")
+    if not uv:
+        raise RuntimeError("modelscope is missing and uv is unavailable; install uv or run the downloader in an environment containing modelscope")
+    print("modelscope is missing; resolving an isolated uv --with modelscope environment (the selected workspace environment is unchanged)",
+          file=sys.stderr, flush=True)
+    command = [uv, "run", "--no-project", "--with", "modelscope", "python",
+               str(Path(__file__).resolve()), *[value for value in sys.argv[1:] if value != "--auto-install"]]
+    raise SystemExit(subprocess.call(command))
 
 
 def redirect_logs(local_dir: Path) -> None:
@@ -151,6 +158,7 @@ def redirect_logs(local_dir: Path) -> None:
 
 def download_with_retry(args: argparse.Namespace) -> Path:
     from modelscope import snapshot_download
+    import importlib.metadata
 
     args.local_dir.mkdir(parents=True, exist_ok=True)
     if args.cache_dir is not None:
@@ -160,6 +168,11 @@ def download_with_retry(args: argparse.Namespace) -> Path:
         os.environ["MODELSCOPE_API_TOKEN"] = os.environ["MODELSCOPE_TOKEN"]
 
     print(f"ModelScope model      : {args.model_id}")
+    try:
+        dependency_version = importlib.metadata.version("modelscope")
+    except importlib.metadata.PackageNotFoundError:
+        dependency_version = "unpackaged"
+    print(f"ModelScope dependency : {dependency_version} via {sys.executable}")
     print(f"Revision              : {args.revision}")
     print(f"Download target       : {args.local_dir}")
     print(f"ModelScope cache      : {args.cache_dir if args.cache_dir is not None else 'SDK default'}")

@@ -15,7 +15,7 @@ The adapter:
 ## Prepare
 
 ```bash
-python -B .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py prepare \
+uv run --no-project python -B .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py prepare \
   --output-dir .vaws-local/correctness/aisbench-baseline \
   --host 127.0.0.1 \
   --port 8000 \
@@ -45,7 +45,7 @@ Run `run.sh` only where AISBench is installed and the target service is reachabl
 Select the exact `summary_*.csv` produced by the run:
 
 ```bash
-python -B .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py normalize \
+uv run --no-project python -B .agents/skills/vllm-ascend-correctness-validation/scripts/aisbench_adapter.py normalize \
   --summary-csv /remote/output/summary/summary_20260725_120000.csv \
   --label baseline \
   --execution-id <owned-server-execution> \
@@ -57,6 +57,10 @@ The adapter reads its recorded launch configuration and observations from the
 coordinator. A CSV alone cannot establish server identity. Compare with
 `correctness_run.py --cases ... --baseline ... --candidate ...`; declare an
 intended non-code variation using `--allowed-difference` when applicable.
+
+Omit both execution selectors to normalize an existing local CSV without a
+service. Its metrics remain usable; execution attribution stays unknown, so
+the comparison cannot establish an attributed code regression from that CSV alone.
 
 Repeat with the candidate summary. Compare both normalized files with the same `aisbench-cases.json`.
 

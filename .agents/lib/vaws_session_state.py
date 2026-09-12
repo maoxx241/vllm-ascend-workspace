@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from vaws_local_state import ROOT, WorkspaceStateError, ensure_state_dir
-from vaws_session_id import normalize_session_id
-
-SAFE_TOKEN_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 class SessionStateError(WorkspaceStateError):
@@ -43,10 +40,16 @@ def task_state_root(repo_root: Path = ROOT) -> Path:
 
 
 def require_task_id(value: str) -> str:
-    normalized = normalize_session_id(value)
-    if normalized is None:
+    # A task ID is an exact identity, not a human label to sanitize. Mapping
+    # arbitrary strings onto the same filename can read another task's report.
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,63}", value):
         raise SessionStateError(f"invalid task id: {value!r}")
-    return normalized
+    # These leaves either lose their suffix or name a device on Windows.
+    # Reject them on every platform so shared report paths remain identical.
+    stem = value.split(".", 1)[0]
+    if value.endswith(".") or stem in {"con", "prn", "aux", "nul"} or re.fullmatch(r"(?:com|lpt)[1-9]", stem):
+        raise SessionStateError(f"task id is not a portable directory name: {value!r}")
+    return value
 
 
 def task_dir(task_id: str, repo_root: Path = ROOT) -> Path:
@@ -64,17 +67,6 @@ def benchmark_dir(task_id: str, repo_root: Path = ROOT) -> Path:
     return task_dir(task_id, repo_root) / "benchmark"
 
 
-def safe_token(value: str, *, fallback: str = "item", max_len: int = 63) -> str:
-    token = SAFE_TOKEN_PATTERN.sub("-", value.strip()).strip(".-_")
-    if not token:
-        token = fallback
-    if len(token) <= max_len:
-        return token
-    digest = __import__("hashlib").sha1(token.encode("utf-8")).hexdigest()[:8]
-    keep = max(1, max_len - len(digest) - 1)
-    return f"{token[:keep].rstrip('.-_')}-{digest}"
-
-
 def load_json_object(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -89,9 +81,7 @@ def load_serving_state(task_id: str, *, service: str = "vllm", repo_root: Path =
     """Human business launch config. Not an execution recovery receipt."""
     path = serving_state_path(task_id, repo_root, service=service)
     if not path.exists():
-        path = task_dir(task_id, repo_root) / "serving.json"
-        if not path.exists():
-            return None
+        return None
     try:
         data = load_json_object(path)
         return data if data.get("service", "vllm") == service else None

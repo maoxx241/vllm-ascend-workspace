@@ -52,7 +52,7 @@ def collect_measurement(client, benchmark, sources, entry, *, context_file, serv
                 model=config.model, tokenizer_mode=fixed_dataset.get("tokenizer_mode", "auto"),
                 input_len=fixed_dataset["input_len"], output_len=fixed_dataset["output_len"],
                 path=f"/tmp/{service}-requests.jsonl", num_rows=fixed_dataset.get("num_rows", 64),
-                prompt=fixed_dataset.get("prompt"), python=target["python"],
+                prompt=fixed_dataset.get("prompt"), python=target["python"], endpoint=endpoint,
                 env_preamble=target.get("launch_preamble", "") + "\n")
             config.bench_args = fixed_dataset_bench_args(config.bench_args,
                 dataset_path=dataset["dataset_path"], output_len=fixed_dataset["output_len"])

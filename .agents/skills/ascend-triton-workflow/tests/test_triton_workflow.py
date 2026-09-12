@@ -51,7 +51,7 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(workflow.WorkflowError, "requires validation"):
             workflow.validate_config(payload)
 
-    def test_full_lifecycle_passes(self) -> None:
+    def test_imported_stage_success_does_not_prove_candidate_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "config.json"
@@ -80,7 +80,9 @@ class WorkflowTests(unittest.TestCase):
                 write_manifest(child_path, child)
                 workflow._link_evidence(output, stage=stage, child_path=child_path, updated_at=NOW)
             result = workflow._finalize_report(output, updated_at=NOW)
-            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["status"], "inconclusive")
+            summary = json.loads(Path(result["summary"]).read_text(encoding="utf-8"))
+            self.assertTrue(all(row["candidate_execution"] == "unknown" for row in summary["stages"]))
 
     def test_one_call_reports_missing_evidence_without_manual_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,6 +118,25 @@ class WorkflowTests(unittest.TestCase):
             result = workflow._finalize_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "inconclusive")
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

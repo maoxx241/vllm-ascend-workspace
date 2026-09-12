@@ -148,3 +148,24 @@ def test_failed_dependency_install_does_not_prepare_knowledge(tmp_path, monkeypa
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False and "knowledge" not in payload
     assert "exit code 1" in payload["error"]
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--packages-only", "--locked", "--group", "dev"],
+    ["--locked", "--group", "dev", "--packages-only"],
+])
+def test_packages_only_preserves_uv_options_without_touching_knowledge(tmp_path, monkeypatch, capsys, arguments):
+    monkeypatch.setattr(deps, "ROOT", tmp_path)
+    monkeypatch.setenv(envs.PIN_ENV, "running-client-receipt.json")
+    receipt = {"key": "a" * 64, "root": str(tmp_path / "ready"),
+               "receipt": str(tmp_path / "ready/.vaws-ready.json")}
+    installed = []
+    monkeypatch.setattr(deps, "prepare_environment", lambda root, **kwargs: installed.append((root, kwargs)) or receipt)
+    monkeypatch.setattr(links, "link_environment", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deps, "prepare_knowledge", lambda root: pytest.fail("packages-only must not touch knowledge"))
+    assert deps.main(["sync", *arguments]) == 0
+    assert installed == [(tmp_path, {"install_options": ["--locked", "--group", "dev"]})]
+    assert deps.os.environ[envs.PIN_ENV] == "running-client-receipt.json"
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True and payload["receipt"] == receipt
+    assert payload["knowledge"] == {"status": "skipped", "reason": "packages_only"}

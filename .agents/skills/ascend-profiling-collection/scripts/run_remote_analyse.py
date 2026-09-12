@@ -173,6 +173,8 @@ def run_analyse(
     *,
     timeout: float = 1800,
     export_mode: str = DEFAULT_ANALYSE_EXPORT,
+    python: str = "python3",
+    preamble: str = ASCEND_ENV_PREAMBLE,
 ) -> None:
     """Run torch_npu.profiler.profiler.analyse(remote_dir) on the container.
 
@@ -185,7 +187,7 @@ def run_analyse(
     (``run_analyse_parallel``) instead.
     """
     py = build_analyse_py(export_mode, target_expr=json.dumps(remote_dir))
-    script = f"{ASCEND_ENV_PREAMBLE}\npython3 -c {shlex.quote(py)}\n"
+    script = f"{preamble}\n{shlex.quote(python)} -c {shlex.quote(py)}\n"
     result = ssh_exec(ep, script, check=False, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
@@ -219,6 +221,7 @@ def build_parallel_analyse_script(
     preamble: str = ASCEND_ENV_PREAMBLE,
     py_code: str | None = None,
     export_mode: str = DEFAULT_ANALYSE_EXPORT,
+    python: str = "python3",
 ) -> str:
     """Build the single remote bash script that analyses all dirs concurrently.
 
@@ -270,7 +273,7 @@ analyse_one() {{
   log="${{dir%/}}/{PARALLEL_LOG_NAME}"
   (
 {preamble_block}
-    python3 -c "$PY_CODE" "$dir"
+    {shlex.quote(python)} -c "$PY_CODE" "$dir"
   ) >"$log" 2>&1
   rc=$?
   printf '%s\\t%s\\n' "$rc" "$dir" >>"$RESULTS"
@@ -337,6 +340,8 @@ def run_analyse_parallel(
     timeout: float = 1800,
     ssh_grace_s: float = 180,
     export_mode: str = DEFAULT_ANALYSE_EXPORT,
+    python: str = "python3",
+    preamble: str = ASCEND_ENV_PREAMBLE,
 ) -> float:
     """Analyse every rank dir concurrently on the remote; return wall seconds.
 
@@ -354,6 +359,7 @@ def run_analyse_parallel(
     script = build_parallel_analyse_script(
         dirs, parallelism=parallelism, timeout_s=timeout,
         export_mode=export_mode,
+        python=python, preamble=preamble,
     )
     start = time.monotonic()
     result = ssh_exec(ep, script, check=False, timeout=timeout + ssh_grace_s)
@@ -363,7 +369,7 @@ def run_analyse_parallel(
     if (
         result.returncode == 0
         and per_rank is not None
-        and all(d in per_rank for d in dirs)
+        and all(per_rank.get(d) == 0 for d in dirs)
     ):
         return wall_s
 
@@ -443,6 +449,8 @@ def verify_outputs(
             "path": path,
             "exists": result.returncode == 0,
         }
+    if export_mode == "both":
+        outputs["db_path"] = verify_outputs(ep, remote_dir, "db")["db_path"]
     return outputs
 
 
@@ -476,6 +484,8 @@ def verify_outputs_local(
     for key, rel in EXPECTED_OUTPUTS.items():
         path = base / rel
         outputs[key] = {"path": str(path), "exists": path.is_file()}
+    if export_mode == "both":
+        outputs["db_path"] = verify_outputs_local(rank_dir, "db")["db_path"]
     return outputs
 
 
@@ -501,6 +511,10 @@ def classify_status(outputs: dict[str, Any]) -> str:
         return "missing_kernel_details"
     if not all(outputs[key]["exists"] for key in EXPECTED_OUTPUTS):
         return "partial"
+    if outputs.get("export_type") == "both":
+        db = outputs.get("db_path") or {}
+        if not db.get("exists") or not db.get("non_empty"):
+            return "partial"
     return "ok"
 
 
@@ -512,6 +526,8 @@ def analyse_profile_root(
     analyse_timeout: float = 1800,
     analyse_parallelism: int = 8,
     analyse_export: str = DEFAULT_ANALYSE_EXPORT,
+    python: str = "python3",
+    preamble: str = ASCEND_ENV_PREAMBLE,
 ) -> dict[str, Any]:
     """Discover, analyse, and verify every *_ascend_pt under profile_root.
 
@@ -576,6 +592,7 @@ def analyse_profile_root(
     wall_s = run_analyse_parallel(
         ep, targets, parallelism=parallelism, timeout=analyse_timeout,
         export_mode=analyse_export,
+        python=python, preamble=preamble,
     )
     emit_progress("analyse", f"parallel analyse finished in {wall_s:.1f}s")
 
@@ -680,8 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
             "ascend_pytorch_profiler_*.db per rank and skips all text "
             "exports (the analysis skill consumes the db directly); 'text' "
             "writes the historical kernel_details.csv + trace_view.json; "
-            "'both' writes everything. text/both keep the historical "
-            "csv-based output verification"
+            "'both' requires the db and text outputs"
         ),
     )
     return p
@@ -710,6 +726,8 @@ def main(argv: list[str] | None = None) -> int:
             analyse_timeout=args.analyse_timeout,
             analyse_parallelism=args.analyse_parallelism,
             analyse_export=args.analyse_export,
+            python=target.python or "python3",
+            preamble=target.launch_preamble or ASCEND_ENV_PREAMBLE,
         )
         bundle["machine"] = alias
         bundle["mode"] = target.mode

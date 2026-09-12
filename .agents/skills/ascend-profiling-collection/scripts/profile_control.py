@@ -90,7 +90,8 @@ def post_remote_action(ep, port: int, action: str, timeout: int) -> dict[str, An
     if stdout:
         last_line = stdout.splitlines()[-1]
         try:
-            payload = json.loads(last_line)
+            decoded = json.loads(last_line)
+            payload = decoded if isinstance(decoded, dict) else None
         except json.JSONDecodeError:
             payload = None
 
@@ -104,7 +105,11 @@ def post_remote_action(ep, port: int, action: str, timeout: int) -> dict[str, An
             f"{json.dumps(detail, ensure_ascii=False)}"
         )
 
-    return payload or {"ok": True, "status": 200, "body": ""}
+    if (not isinstance(payload, dict) or payload.get("ok") is not True
+            or not isinstance(payload.get("status"), int) or isinstance(payload["status"], bool)
+            or not 200 <= payload["status"] < 300):
+        raise RuntimeError(f"remote {action} returned no confirmed HTTP success: {stdout[-2000:]}")
+    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -23,7 +23,6 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -196,7 +195,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if not isinstance(endpoints, list):
         errors.append("network_endpoints must be an array")
         endpoints = []
-    endpoint_keys: set[tuple[str, int]] = set()
     for index, endpoint in enumerate(endpoints):
         if not isinstance(endpoint, Mapping):
             errors.append(f"network_endpoints[{index}] must be an object")
@@ -209,11 +207,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
             )
         if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
             errors.append(f"network_endpoints[{index}].port must be 1..65535")
-        if isinstance(address, str) and isinstance(port, int):
-            key = (address, port)
-            if key in endpoint_keys:
-                errors.append(f"network endpoint is duplicated: {address}:{port}")
-            endpoint_keys.add(key)
     if errors:
         raise DistributedDebugError("; ".join(errors))
 
@@ -416,8 +409,8 @@ def analyze_evidence(
             findings.append(
                 _finding(
                     "collective-participant-mismatch",
-                    "confirmed",
-                    "The collective entry set does not match group membership.",
+                    "confirmed" if entered - expected else "incomplete",
+                    "Recorded collective entries do not cover the expected membership; missing events may reflect capture gaps.",
                     group=group,
                     sequence=sequence,
                     expected=sorted(expected),

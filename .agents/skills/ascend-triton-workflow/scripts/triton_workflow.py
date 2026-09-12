@@ -22,7 +22,6 @@ from vaws_venv import ensure_workspace_interpreter  # noqa: E402
 ensure_workspace_interpreter(repo_root=ROOT)
 
 
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     TERMINAL_STATUSES,
@@ -200,7 +199,9 @@ def _link_evidence(output_dir: Path, *, stage: str, child_path: Path, updated_at
             "scope": scope,
             "run_id": child["run_id"],
             "run_type": child["run_type"],
-            "status": child["status"],
+            "status": "inconclusive" if child["status"] == "passed" else child["status"],
+            "reported_status": child["status"],
+            "candidate_execution": "unknown",
             "manifest": str(child_path.resolve()),
             "artifacts": child["artifacts"],
             "linked_at": timestamp,

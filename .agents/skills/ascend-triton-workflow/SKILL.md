@@ -11,19 +11,23 @@ Choose the stages required by the requested outcome. Reuse relevant existing evi
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
+uv run --no-project python .agents/skills/ascend-triton-workflow/scripts/triton_workflow.py --config operator.json --development development/manifest.json --validation validation/manifest.json --optimization optimization/manifest.json
 ```
 
 The config contains op_name, source, target, cases and required_stages. One report call verifies stage scope, actual artifacts, passing cases and kernel identity. Missing or unrelated evidence cannot complete the workflow. Stage identifiers and linking are internal.
 
 For only one stage, use its owning skill directly.
 
+The report aggregates supplied evidence. Imported numerical results and latency
+measurements do not by themselves prove candidate NPU execution; this remains
+unknown in the aggregate status. Keep the measured outcomes and use existing
+runner or profiler evidence in the task assessment. That report limitation adds
+no prerequisite for work already supported by valid execution evidence.
+
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 
 - [Business input example](references/inputs.md)

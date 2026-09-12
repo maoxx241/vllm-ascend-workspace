@@ -6,10 +6,10 @@ alwaysApply: false
 
 # Skill Package Maintenance
 
-When modifying any skill package, follow the maintenance rule in `AGENTS.md` — keep the per-skill bundle (`SKILL.md` plus supporting `scripts/`, `references/`, `agents/`, and similar files), shared modules, and remote-code-parity files in sync.
+When modifying a skill, update the affected scripts, references, metadata and generated client projections together, as described in `AGENTS.md`.
 
 ## Script conventions (supplemental to AGENTS.md)
 
-- CLI parsers must accept common aliases and disable brittle prefix-abbreviation.
-- Progress on `stderr` (`__VAWS_PROGRESS__=<json>`), final payload on `stdout` (single JSON object).
+- Keep one documented spelling per option and disable prefix abbreviation.
+- Progress goes to `stderr`; the final machine-readable result goes to `stdout`.
 - Default metadata that can be safely inferred; never silently default security-sensitive values.

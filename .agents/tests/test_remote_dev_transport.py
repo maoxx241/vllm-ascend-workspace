@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 LIB = ROOT / ".agents" / "lib"
@@ -128,7 +129,7 @@ class MuxedStreamRefusalTests(unittest.TestCase):
             api["interactive_ssh_command"](endpoint, ["true"])
 
 
-class V03ConsumerArgvTests(unittest.TestCase):
+class ConsumerArgvTests(unittest.TestCase):
     def setUp(self) -> None:
         remote_dev.require_transport()
         self.endpoint = SimpleNamespace(host=HOST, port=PORT, user=USER)
@@ -168,6 +169,79 @@ class V03ConsumerArgvTests(unittest.TestCase):
         self.assertIn(cfg.get("controlmaster", "").lower(), {"false", "no"})
         self.assertIn(cfg.get("pubkeyauthentication", "").lower(), {"false", "no"})
         self.assertEqual(cfg.get("numberofpasswordprompts"), "1")
+
+
+class EndpointPolicyTests(unittest.TestCase):
+    def test_mapping_endpoint_retains_authentication_and_execution_policy(self):
+        from dataclasses import asdict
+        from vaws_remote_target import ssh_endpoint_from_mapping
+
+        mapping = dict(host=HOST, port=PORT, user="worker", identity_file="selected-key",
+                       root="/bound-root", cwd="/case", runtime_env=False,
+                       runtime_env_file="/runtime/custom.sh", connect_timeout_ms=4000,
+                       ssh_mux=False, keepalive=True, kind="direct-endpoint",
+                       alias="selected", source={"execution": "bound"})
+        endpoint = ssh_endpoint_from_mapping(mapping)
+        self.assertEqual(asdict(remote_dev.endpoint_from(endpoint)), mapping)
+        argv = remote_dev.ssh_argv(endpoint)
+        self.assertEqual(argv[argv.index("-i") + 1], "selected-key")
+        self.assertEqual(argv[argv.index("-l") + 1], "worker")
+        self.assertIn("ConnectTimeout=4", argv)
+
+    def test_native_endpoint_overrides_preserve_routing_and_runtime_policy(self):
+        Endpoint = remote_dev.require_transport()["Endpoint"]
+        original = Endpoint(HOST, PORT, root="/bound-root", cwd="/old-cwd",
+                            runtime_env=False, runtime_env_file="/custom-runtime.sh",
+                            ssh_mux=True, identity_file="old-key", alias="worker",
+                            source={"execution": "fixed-input"})
+        selected = remote_dev.endpoint_from(original, connect_timeout_s=3, cwd="/selected-cwd",
+                                            identity_file="selected-key", ssh_mux=False)
+        self.assertEqual(selected.connect_timeout_ms, 3000)
+        self.assertEqual(selected.cwd, "/selected-cwd")
+        self.assertEqual(selected.identity_file, "selected-key")
+        self.assertFalse(selected.ssh_mux)
+        stream = remote_dev.endpoint_from(original, long_stream=True, connect_timeout_s=7)
+        self.assertEqual(stream.connect_timeout_ms, 7000)
+        self.assertFalse(stream.ssh_mux)
+        self.assertTrue(stream.keepalive)
+        for name in ("host", "port", "user", "root", "cwd", "runtime_env", "runtime_env_file", "identity_file", "alias", "source"):
+            self.assertEqual(getattr(stream, name), getattr(original, name), name)
+        self.assertTrue(original.ssh_mux)
+
+    def test_interactive_wrapper_disables_mux_on_a_native_endpoint(self):
+        endpoint = remote_dev.as_endpoint(HOST, PORT, ssh_mux=True)
+        argv = remote_dev.interactive_ssh_command(endpoint, ["true"], connect_timeout_s=4)
+        self.assertIn("ConnectTimeout=4", argv)
+        self.assertIn("ControlMaster=no", argv)
+        self.assertTrue(endpoint.ssh_mux)
+
+    def test_transport_calls_do_not_inspect_dependency_lock(self):
+        with mock.patch.object(remote_dev, "inspect", side_effect=AssertionError("ordinary I/O must not scan the lock")):
+            argv = remote_dev.ssh_argv(SimpleNamespace(host=HOST, port=PORT, user=USER))
+        self.assertIn(HOST, argv)
+
+    def test_in_process_environment_removes_a_stale_resolver(self):
+        with mock.patch.dict(os.environ, {"REMOTE_DEV_RESOLVERS": "obsolete:setup"}):
+            remote_dev.apply_consumer_environment()
+            self.assertNotIn("REMOTE_DEV_RESOLVERS", os.environ)
+
+    def test_missing_exit_status_is_not_success_and_timeout_keeps_evidence(self):
+        api = remote_dev.require_transport()
+        endpoint = api["Endpoint"](HOST, PORT)
+        completed = SimpleNamespace(returncode=None, stdout="partial output", stderr="connection evidence", timed_out=False)
+        fake = {**api, "run_script": mock.Mock(return_value=completed), "run_stream": mock.Mock(return_value=completed)}
+        with mock.patch.object(remote_dev, "require_transport", return_value=fake):
+            result = remote_dev.ssh_exec(endpoint, "true", check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "partial output")
+            self.assertIn("connection evidence", result.stderr)
+            self.assertIn("without an exit status", result.stderr)
+            with self.assertRaisesRegex(RuntimeError, "without an exit status"):
+                remote_dev.ssh_stream(endpoint, "true")
+            completed.timed_out = True
+            timed_out = remote_dev.ssh_exec(endpoint, "true", timeout=2, check=False)
+            self.assertIn("connection evidence", timed_out.stderr)
+            self.assertIn("timed out after 2s", timed_out.stderr)
 
 
 if __name__ == "__main__":

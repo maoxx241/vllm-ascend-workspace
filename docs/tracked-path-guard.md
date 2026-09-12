@@ -15,13 +15,13 @@ The dated baseline is
 [`.agents/policy/tracked-paths-baseline.json`](../.agents/policy/tracked-paths-baseline.json).
 
 ```bash
-python3 .agents/scripts/tracked_path_check.py --mode report
-python3 .agents/scripts/tracked_path_check.py --mode enforce
+uv run --no-project python .agents/scripts/tracked_path_check.py --mode report
+uv run --no-project python .agents/scripts/tracked_path_check.py --mode enforce
 ```
 
 Exit codes: `0` clean or `--mode report`, `1` policy violated, `2` unusable
 policy/baseline/invocation. Progress on `stderr`, one JSON payload on
-`stdout`. CI runs enforce immediately after `repo_boundary_check.py`.
+`stdout`. CI runs enforce after the local test suites.
 
 ## What is scanned
 
@@ -45,8 +45,9 @@ file.
 
 A named path exists only when `git ls-files` lists that file or a file
 under that directory. An untracked leftover on disk does not satisfy the
-reference and does not turn a baseline row stale. The working tree is
-not consulted.
+reference and does not turn a baseline row stale. Tracked document contents
+are read from the working tree; target existence follows the index. Stage
+added and deleted paths before checking a pending change.
 
 `.vaws-local/` and `.vaws-runtime/` are allowed (untracked state).
 Placeholders such as `<session-id>` are allowed. The former in-tree
@@ -60,7 +61,7 @@ tracked-leak secret-key detector.
 ## The baseline
 
 Historical rows, if any remain, are attributed `historical-evidence`.
-Three anti-rot properties, matching the boundary guard:
+Three properties keep exceptions from hiding new or fixed references:
 
 1. **Nothing new passes.** A hit absent from the baseline fails enforce.
 2. **A fixed hit must delete its row.** A stale baseline row is a hard

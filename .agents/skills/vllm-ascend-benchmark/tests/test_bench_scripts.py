@@ -146,6 +146,11 @@ class PresetTests(unittest.TestCase):
 
 
 class AssembleConfigPresetTests(unittest.TestCase):
+    def test_explicit_empty_arguments_clear_preset_arguments(self):
+        cfg = _assemble(preset="dsv4-flash", model="/m", serve_args=[], bench_args=[])
+        self.assertEqual(cfg.serve_args, [])
+        self.assertEqual(cfg.bench_args, [])
+
     def test_preset_values_flow_into_config(self):
         cfg = _assemble(preset="dsv4-flash", model="/m")
         self.assertEqual(cfg.tp, 8)
@@ -207,7 +212,8 @@ class ServeStartArgsTests(unittest.TestCase):
 
 class BenchEnvExportTests(unittest.TestCase):
     def setUp(self):
-        self.target = {"live": True, "python": "/managed/bin/python", "launch_preamble": "export MANAGED=1", "launch_observation": {}}
+        self.target = {"live": True, "python": "/managed/bin/python", "launch_preamble": "export MANAGED=1", "launch_observation": {},
+                       "endpoint": {"host": "10.0.0.1", "port": 2222, "user": "worker", "identity_file": "/keys/worker"}}
         for name, value in (("task_client", object()), ("execution_target", self.target)):
             patcher = mock.patch.object(_common, name, return_value=value)
             patcher.start()
@@ -222,6 +228,7 @@ class BenchEnvExportTests(unittest.TestCase):
 
         def fake_ssh(endpoint, script, **kwargs):
             captured["script"] = script
+            captured["endpoint"] = endpoint
             return subprocess.CompletedProcess(
                 ["ssh"], 0, stdout='{"output_throughput": 1.0}', stderr="",
             )
@@ -236,6 +243,53 @@ class BenchEnvExportTests(unittest.TestCase):
         self.assertIn("export PYTHONPATH=", script)
         self.assertIn("export VLLM_VERSION=", script)
         self.assertEqual(result["output_throughput"], 1.0)
+        self.assertEqual(captured["endpoint"].user, "worker")
+        self.assertEqual(captured["endpoint"].identity_file, "/keys/worker")
+
+
+class PartialBenchmarkTests(unittest.TestCase):
+    setUp = BenchEnvExportTests.setUp
+
+    def test_later_failure_preserves_completed_raw_results(self):
+        cfg = _common.BenchConfig(model="/m", task_id="task-1")
+        raw = {"output_throughput": 12.0, "input_lens": [16], "observation": {"dataset": "test"}}
+        with mock.patch.object(bench_run, "assemble_config", return_value=cfg), mock.patch.object(
+            bench_run, "call_serve_start", return_value={"status": "ready", "base_url": "http://localhost:8000", "execution_id": "exec-1"}
+        ), mock.patch.object(bench_run, "_get_ssh_endpoint", return_value=("10.0.0.1", 22)), mock.patch.object(
+            bench_run, "run_bench_on_remote", side_effect=[raw, RuntimeError("second run failed")]
+        ), mock.patch.object(bench_run, "call_serve_stop", return_value={"status": "stopped"}), mock.patch.object(
+            bench_run, "write_local_result"
+        ) as saved, mock.patch.object(bench_run, "print_json") as printed:
+            rc = bench_run.main(["--model", "/m", "--runs", "2"])
+        self.assertEqual(rc, 1)
+        record = printed.call_args.args[0]
+        self.assertEqual(record["completed_runs"][0]["raw_result"], raw)
+        self.assertEqual(saved.call_args.args[1], record)
+
+    def test_cleanup_exception_keeps_saved_measurement_and_execution(self):
+        cfg = _common.BenchConfig(model="/m", task_id="task-1")
+        raw = {"output_throughput": 12.0, "input_lens": [16]}
+        events = []
+        def save(config, result, **kwargs):
+            events.append("saved")
+            return Path("saved.json")
+        def stop(*args, **kwargs):
+            self.assertIn("saved", events)
+            raise RuntimeError("stop transport unavailable")
+        with mock.patch.object(bench_run, "assemble_config", return_value=cfg), mock.patch.object(
+            bench_run, "call_serve_start", return_value={"status": "ready", "base_url": "http://localhost:8000", "execution_id": "exec-1"}
+        ), mock.patch.object(bench_run, "_get_ssh_endpoint", return_value=("10.0.0.1", 22)), mock.patch.object(
+            bench_run, "run_bench_on_remote", return_value=raw
+        ), mock.patch.object(bench_run, "call_serve_stop", side_effect=stop), mock.patch.object(
+            bench_run, "write_local_result", side_effect=save
+        ), mock.patch.object(bench_run, "print_json") as printed:
+            rc = bench_run.main(["--model", "/m"])
+        record = printed.call_args.args[0]
+        self.assertEqual(rc, 1)
+        self.assertEqual(record["status"], "cleanup_failed")
+        self.assertEqual(record["raw_result"], raw)
+        self.assertEqual(record["cleanup"]["execution_id"], "exec-1")
+        self.assertTrue(all("stop transport unavailable" in attempt["error"] for attempt in record["cleanup"]["attempts"]))
 
     def test_no_bench_env_means_no_exports(self):
         cfg = _common.BenchConfig(model="/m", execution_id="owned")

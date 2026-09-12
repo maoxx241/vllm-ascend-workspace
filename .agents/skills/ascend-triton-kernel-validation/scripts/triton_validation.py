@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan, record, and analyze Ascend Triton correctness evidence."""
+"""Summarize observed Ascend Triton correctness evidence and source lint."""
 
 from __future__ import annotations
 
@@ -27,8 +27,7 @@ ensure_workspace_interpreter(repo_root=ROOT)
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from validate_triton_impl import analyze_file  # noqa: E402
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
+from lint_triton_source import lint_file  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -197,14 +196,12 @@ def _prepare_report(
         raise ValidationError(f"kernel does not exist: {kernel}")
     config = _load_json(config_path, "validation config")
     validate_config(config)
-    static_check = analyze_file(kernel)
-    if not static_check.get("valid"):
-        raise ValidationError(f"static Triton gate failed: {json.dumps(static_check, ensure_ascii=False)}")
+    static_check = lint_file(kernel)
     timestamp = created_at or utc_now()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "raw-results").mkdir()
     _write_json(output_dir / "validation-config.json", config)
-    _write_json(output_dir / "static-check.json", static_check)
+    _write_json(output_dir / "source-lint.json", static_check)
     _write_json(
         output_dir / "case-matrix.json",
         {"schema_version": SCHEMA_VERSION, "kernel": {"path": str(kernel.resolve()), "sha256": sha256_file(kernel)}, "cases": [{**case, "status": "pending"} for case in config["cases"]]},
@@ -225,7 +222,7 @@ def _prepare_report(
     for name, kind, uri in (
         ("kernel", "triton-kernel", str(kernel.resolve())),
         ("validation-config", "validation-config", "validation-config.json"),
-        ("static-check", "static-check", "static-check.json"),
+        ("source-lint", "source-lint", "source-lint.json"),
         ("case-matrix", "case-matrix", "case-matrix.json"),
         ("results", "validation-results", "results.json"),
     ):
@@ -273,9 +270,19 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         status = "inconclusive"
     else:
         status = "passed"
+    numerical_status = status
+    # Imported case results report numerical outcomes; neither those statuses
+    # nor a source scan establish that the candidate actually ran on the NPU.
+    # Keep that distinction without imposing a new evidence form on callers.
+    if status == "passed":
+        status = "inconclusive"
+    static_check = _load_json(output_dir / "source-lint.json", "source lint")
     analysis = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
+        "numerical_status": numerical_status,
+        "candidate_execution": "unknown",
+        "candidate_execution_reason": "The supplied case results and source lint do not establish actual candidate NPU launch. Reuse existing runner or profiler evidence in the task assessment.",
         "op_name": config["op_name"],
         "total_cases": len(matrix["cases"]),
         "passed_cases": len(passed),
@@ -284,16 +291,25 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         "unsupported_cases": unsupported,
         "status_counts": dict(sorted(counts.items())),
         "results": results["results"],
+        "source_lint": static_check,
     }
     _write_json(output_dir / "analysis.json", analysis)
     report = (
         "# Ascend Triton validation report\n\n"
         f"- Status: **{status}**\n"
+        f"- Numerical cases: **{numerical_status}**\n"
+        "- Candidate NPU execution: **unknown**\n"
         f"- Operator: `{config['op_name']}`\n"
         f"- Passed: {len(passed)} / {len(matrix['cases'])}\n"
         f"- Missing: {', '.join(missing) or 'none'}\n"
         f"- Failed: {', '.join(failures) or 'none'}\n"
         f"- Unsupported: {', '.join(unsupported) or 'none'}\n"
+        "\nNumerical status summarizes the supplied case results. Actual candidate "
+        "execution needs existing runner or profiler evidence and Agent assessment. "
+        "Source lint is advisory: "
+        "its ModelNew.forward scan cannot establish launch coverage or absence of "
+        "computation fallback for arbitrary operators. Inspect source-lint.json "
+        "and actual launch evidence when assessing the implementation.\n"
     )
     _atomic_write(output_dir / "report.md", report)
     timestamp = updated_at or utc_now()
@@ -304,7 +320,7 @@ def _analyze_report(output_dir: Path, *, updated_at: str | None = None) -> dict[
         manifest = add_artifact(manifest, name=name, kind=kind, uri=uri, updated_at=timestamp)
     manifest = transition_status(manifest, status, updated_at=timestamp)
     write_manifest(output_dir / "manifest.json", manifest)
-    return {"status": status, "passed_cases": len(passed), "total_cases": len(matrix["cases"]), "analysis": str((output_dir / "analysis.json").resolve())}
+    return {"status": status, "numerical_status": numerical_status, "candidate_execution": "unknown", "passed_cases": len(passed), "total_cases": len(matrix["cases"]), "analysis": str((output_dir / "analysis.json").resolve())}
 
 
 def build_report(config_path: Path, result_paths: list[Path], *, output_dir: Path | None = None, kernel: Path, workspace_root: Path = ROOT) -> dict[str, Any]:

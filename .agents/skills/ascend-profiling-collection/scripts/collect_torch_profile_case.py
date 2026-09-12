@@ -51,14 +51,11 @@ import argparse
 import base64
 import json
 import shlex
-import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -66,12 +63,11 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _common import (
-    COLLECTION_STATE_DIR,
+    ASCEND_ENV_PREAMBLE,
     ROOT,
     call_serve_start,
     call_serve_stop,
     emit_progress,
-    ensure_dir,
     now_utc,
     open_local_tunnel,
     print_json,
@@ -556,8 +552,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.8,
         help=(
             "minimum required success rate of the benchmark wave (0..1); "
-            "below this the run is reported as failed because the trace was "
-            "captured without real model traffic. The follow-up request is "
+            "below this the workload is reported as failed; completed requests "
+            "and any captured trace remain available. The follow-up request is "
             "always required to succeed independently of this threshold"
         ),
     )
@@ -624,7 +620,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--image-height", type=int, default=480,
                    help="resize the image to this pixel height before encoding")
 
-    # Optional: parity opt-out (forwarded to serving)
     return p
 
 
@@ -636,12 +631,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     machine_alias = getattr(args, "service", None) or "vllm"
-    args.session_id = machine_alias
-    args.session_file = None
 
     run_dir = unique_collection_run_dir(
         tag=args.tag,
-        session_id=args.session_id,
+        session_id=None,
         machine=machine_alias,
     )
 
@@ -677,8 +670,9 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": now_utc(),
         "tag": args.tag,
         "machine": machine_alias,
-        "session_id": args.session_id,
-        "session_file": args.session_file,
+        "task_id": None,
+        "session_id": None,
+        "session_file": None,
         "model": args.model,
         "served_model_name": args.served_model_name,
         "tp": args.tp,
@@ -712,8 +706,10 @@ def main(argv: list[str] | None = None) -> int:
     service_result: dict[str, Any] | None = None
     stop_result: dict[str, Any] | None = None
     started_service = False
+    profile_open = False
+    ep = None
+    port = 0
     try:
-        started_service = False
         if args.execution_id:
             emit_progress("serve_start", f"using live execution {args.execution_id}")
             session_target = resolve_execution_target(
@@ -721,12 +717,10 @@ def main(argv: list[str] | None = None) -> int:
                 execution_id=args.execution_id,
                 service=args.service,
             )
-            from vaws_task_target import execution_target, task_client
-            routed = execution_target(task_client(args.context_file), str(args.execution_id))
             service_result = {
-                "status": "ready",
+                "status": "existing",
                 "execution_id": args.execution_id,
-                "port": routed.get("service_port"),
+                "port": session_target.service_port,
             }
         else:
             emit_progress("serve_start", f"starting service {args.service}")
@@ -746,7 +740,9 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("service has no port")
         cwd = session_target.cwd or "/vllm-workspace"
         profile_root = f"{cwd.rstrip('/')}/{args.torch_profiler_dir}"
-        args.session_id = session_target.task_id or args.session_id
+        manifest["task_id"] = session_target.task_id
+        manifest["session_id"] = session_target.task_id
+        manifest["execution_id"] = service_result.get("execution_id")
 
         ep = session_target.endpoint
 
@@ -758,6 +754,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest["start_profile"] = post_remote_action(
                 ep, port, "start_profile", args.profile_control_timeout,
             )
+            profile_open = True
 
             emit_progress(
                 "workload",
@@ -803,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest["stop_profile"] = post_remote_action(
                 ep, port, "stop_profile", args.profile_control_timeout,
             )
+            profile_open = False
 
         # Give multi-rank torch profiler a small window to flush trailing data
         # before the service is torn down. /stop_profile usually blocks until
@@ -828,6 +826,8 @@ def main(argv: list[str] | None = None) -> int:
         analyse_bundle = analyse_profile_root(
             ep, profile_root, expected_ranks=expected_ranks,
             analyse_export=args.analyse_export,
+            python=session_target.python or "python3",
+            preamble=session_target.launch_preamble or ASCEND_ENV_PREAMBLE,
         )
         manifest["remote_profile_root"] = profile_root
         manifest["remote_profile_dirs"] = analyse_bundle["dirs"]
@@ -842,9 +842,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest["analyse_parallelism"] = analyse_bundle.get("analyse_parallelism")
         manifest["completed_at"] = now_utc()
 
-        # Hard gate: degenerate roots OR a workload that did not actually
-        # exercise the model both fail loudly so downstream analyze.py is
-        # never asked to interpret a useless trace.
+        # Record whether this collection met its requested workload and rank
+        # coverage. Partial outputs remain useful evidence with that limitation.
         analysis_worst = analyse_bundle["analysis_status"]
         workload_worst = manifest["workload_status"]["status"]
         if analysis_worst == "ok" and workload_worst == "ok":
@@ -894,9 +893,9 @@ def main(argv: list[str] | None = None) -> int:
             reasons.append(f"workload_status={workload_worst}")
         manifest["status"] = "failed"
         manifest["error"] = _failure_payload(
-            "profiling collection produced an unusable trace ("
+            "profiling collection did not meet the requested capture scope ("
             + "; ".join(reasons)
-            + "); re-collect required, see SKILL.md Failure policy"
+            + "); inspect preserved rank outputs and errors before deciding whether to re-analyse or re-collect"
         )
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
@@ -909,6 +908,11 @@ def main(argv: list[str] | None = None) -> int:
         manifest["status"] = "failed"
         manifest["error"] = _failure_payload(str(exc))
         manifest["failed_at"] = now_utc()
+        if profile_open and ep is not None:
+            try:
+                manifest["stop_profile"] = post_remote_action(ep, port, "stop_profile", args.profile_control_timeout)
+            except Exception as control_exc:
+                manifest["stop_profile_error"] = str(control_exc)
         if stop_result is None and started_service:
             try:
                 stop_result = call_serve_stop(

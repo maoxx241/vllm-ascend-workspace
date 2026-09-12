@@ -36,7 +36,6 @@ from vaws_comparability import (  # noqa: E402
     issue_certificate,
     merge_identities,
 )
-from vaws_coordinator.code_identity import manifest_code  # noqa: E402
 from vaws_coordinator.run_manifest import (  # noqa: E402
     RunManifestError,
     add_artifact,
@@ -346,6 +345,9 @@ def _compare_metrics(
             continue
         left = float(baseline[name])
         right = float(candidate[name])
+        if not math.isfinite(left) or not math.isfinite(right):
+            regressions.append({"metric": name, "reason": "non-finite", "baseline": left, "candidate": right})
+            continue
         changed = changed or left != right
         direction = raw_rule.get("direction", "higher")
         if direction not in {"higher", "lower"}:
@@ -356,6 +358,8 @@ def _compare_metrics(
         )
         max_absolute = float(raw_rule.get("max_absolute_regression", 0.0))
         max_relative = float(raw_rule.get("max_relative_regression", 0.0))
+        if not math.isfinite(max_absolute) or not math.isfinite(max_relative) or min(max_absolute, max_relative) < 0:
+            raise CorrectnessError(f"metric rule {name!r} thresholds must be finite and non-negative")
         if degradation > max_absolute or relative > max_relative:
             regressions.append(
                 {
@@ -416,6 +420,9 @@ def compare_case(
             "details": {"metric_regressions": metric_regressions},
         }
     if case_config.get("mode") == "aisbench":
+        if not metric_rules:
+            return {"id": case_id, "classification": "infrastructure_failure",
+                    "details": {"reason": "no task metric comparison was specified"}}
         return {
             "id": case_id,
             "classification": (
@@ -484,6 +491,8 @@ def compare_case(
         raise CorrectnessError(f"{case_id}: numerics must be objects")
     atol = float(comparison_config.get("atol", 0.0))
     rtol = float(comparison_config.get("rtol", 0.0))
+    if not math.isfinite(atol) or not math.isfinite(rtol) or min(atol, rtol) < 0:
+        raise CorrectnessError(f"{case_id}: tolerances must be finite and non-negative")
     numeric_differences: list[dict[str, Any]] = []
     numeric_within_tolerance = False
     for name in sorted(set(left_numeric) | set(right_numeric)):
@@ -916,9 +925,20 @@ def build_report(cases_path: Path, *, baseline_path: Path, candidate_path: Path,
     try:
         comparison = _compare_report(output, baseline_path=baseline_path, candidate_path=candidate_path)
     except (CorrectnessError, ComparabilityError) as exc:
-        comparison = {"status": "inconclusive", "reason": str(exc), "cases": []}
+        try:
+            comparison = compare_documents(_load_json(output / "cases.json", "cases"), baseline, candidate)
+        except CorrectnessError:
+            comparison = {"cases": []}
+        comparison = {**comparison, "observed_status": comparison.get("status", "unknown"),
+                      "status": "inconclusive", "reason": str(exc)}
+        certificate_path = output / "comparability-certificate.json"
+        if certificate_path.is_file():
+            comparison["comparability"] = _load_json(certificate_path, "comparability")
         _atomic_write_json(output / "comparison.json", comparison)
-        _atomic_write_text(output / "report.md", "# Correctness comparison\n\nStatus: **inconclusive**\n\n" + str(exc) + "\n")
+        report = (render_report(comparison, baseline_label=baseline.get("label", "baseline"),
+                                candidate_label=candidate.get("label", "candidate"))
+                  if "primary_classification" in comparison else "# Correctness comparison\n\nStatus: **inconclusive**\n")
+        _atomic_write_text(output / "report.md", report + "\nAttribution limitation: " + str(exc) + "\n")
         raw = output / "raw_outputs"
         raw.mkdir(exist_ok=True)
         shutil.copy2(baseline_path, raw / "baseline.json")
@@ -929,7 +949,7 @@ def build_report(cases_path: Path, *, baseline_path: Path, candidate_path: Path,
             manifest = add_artifact(manifest, name=name, kind=name, uri=uri)
         manifest = transition_status(transition_status(manifest, "running"), "inconclusive")
         write_manifest(output / "manifest.json", manifest)
-        return {**comparison, "report": str(output / "report.md"), "manifest_ref": str(output / "manifest.json")}
+        return {**comparison, "comparison": str(output / "comparison.json"), "report": str(output / "report.md"), "manifest_ref": str(output / "manifest.json")}
     return {"status": comparison["status"], "primary_classification": comparison["primary_classification"],
             "observed_differences": [row["key"] for row in comparison["execution"]["observed_differences"]],
             "comparison": str(output / "comparison.json"), "report": str(output / "report.md"),

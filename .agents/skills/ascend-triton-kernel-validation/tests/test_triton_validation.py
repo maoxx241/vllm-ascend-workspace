@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for Ascend Triton static and correctness gates."""
+"""Tests for Ascend Triton source lint and runtime evidence reports."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def load_script(name: str, filename: str):
     return module
 
 
-static = load_script("validate_triton_impl", "validate_triton_impl.py")
+static = load_script("lint_triton_source", "lint_triton_source.py")
 validation = load_script("_triton_validation_test", "triton_validation.py")
 NOW = "2026-08-03T12:00:00Z"
 
@@ -73,11 +73,24 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(manifest["status"], "inconclusive")
             self.assertEqual(list((root / ".vaws-local/report-inputs").glob("*.json")), [])
 
-    def test_static_gate_detects_fallback(self) -> None:
+    def test_function_operator_report_is_not_blocked_by_wrapper_lint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            kernel = root / "kernel.py"
+            kernel.write_text("from launchers import run_kernel\ndef operator(x):\n    return run_kernel(x)\n", encoding="utf-8")
+            result = validation.build_report(config_path, [], kernel=kernel, output_dir=root / "report")
+            self.assertEqual(result["status"], "inconclusive")
+            analysis = json.loads(Path(result["analysis"]).read_text(encoding="utf-8"))
+            self.assertTrue(analysis["source_lint"]["advisory"])
+            self.assertEqual(analysis["source_lint"]["status"], "out_of_scope")
+
+    def test_source_lint_detects_fallback(self) -> None:
         tree = __import__("ast").parse(kernel_source(fallback=True))
-        result = static.analyze_tree(tree)
-        self.assertFalse(result["valid"])
-        self.assertFalse(result["checks"]["no_pytorch_fallback"]["passed"])
+        result = static.lint_tree(tree)
+        self.assertEqual(result["pytorch_fallback"], "unknown")
+        self.assertTrue(any(item["call"].startswith("torch.") and item["line"] > 0 for item in result["potential_compute_calls"]))
 
     def test_full_lifecycle_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,8 +105,26 @@ class ValidationTests(unittest.TestCase):
             result_path.write_text(json.dumps({"schema_version": 1, "case_id": "case-1", "status": "passed", "comparisons": [{"output": "out", "max_abs": 0.0, "max_rel": 0.0, "cosine": 1.0}]}), encoding="utf-8")
             validation._record_result(output, result_path=result_path, recorded_at=NOW)
             result = validation._analyze_report(output, updated_at=NOW)
-            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertEqual(result["numerical_status"], "passed")
+            self.assertEqual(result["candidate_execution"], "unknown")
             self.assertEqual(result["passed_cases"], 1)
+
+    def test_reference_fallback_results_do_not_prove_candidate_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps(config()), encoding="utf-8")
+            kernel = root / "kernel.py"
+            kernel.write_text(kernel_source(fallback=True), encoding="utf-8")
+            result_path = root / "reference-result.json"
+            result_path.write_text(json.dumps({"schema_version": 1, "case_id": "case-1", "status": "passed", "comparisons": [{"output": "out", "max_abs": 0.0}]}), encoding="utf-8")
+            result = validation.build_report(config_path, [result_path], kernel=kernel, output_dir=root / "report")
+            self.assertEqual(result["numerical_status"], "passed")
+            self.assertEqual(result["candidate_execution"], "unknown")
+            self.assertEqual(result["status"], "inconclusive")
+            manifest = json.loads(Path(result["manifest_ref"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "inconclusive")
 
     def test_missing_case_is_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,6 +138,25 @@ class ValidationTests(unittest.TestCase):
             result = validation._analyze_report(output, updated_at=NOW)
             self.assertEqual(result["status"], "inconclusive")
 
+
+
+# This suite exercises report semantics, not coordinator Git snapshotting.
+# Real code-identity tests belong to the coordinator package.
+from unittest.mock import patch as _patch_report_code
+_REPORT_CODE = {"source_head": "1" * 40, "snapshot_commit": "2" * 40, "dirty": True}
+_report_code_patch = _patch_report_code("vaws_coordinator.code_identity.manifest_code", return_value=_REPORT_CODE)
+
+
+def setup_module():
+    _report_code_patch.start()
+
+
+def teardown_module():
+    _report_code_patch.stop()
+
+
+setUpModule = setup_module
+tearDownModule = teardown_module
 
 if __name__ == "__main__":
     unittest.main()

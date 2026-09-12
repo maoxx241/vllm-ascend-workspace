@@ -74,13 +74,6 @@ allowlist:
     justification: RFC 1918 example host in skill recipes and offline tests; not routable and not an address of this project's fleet.
     remediation: Migrate to RFC 5737 192.0.2.x so example addresses are reserved documentation values.
 
-  # --------------------------------- envelope shared-root literals
-  - id: result-envelope-safe-home-prefixes
-    path_glob: .agents/lib/vaws_result_envelope.py
-    categories: [absolute-user-path]
-    match_regex: ^/home/(?:models|data|cache|shared)$
-    justification: Bare shared-root literals from the accepted envelope _SAFE_HOME_PREFIXES definition; they name data roots, not a person. Longer or different home paths, and the same names in other files, stay detected.
-
   # ------------------------------------------------------------------- names
   - id: schema-example-workspace-hostname
     path_glob: .agents/schemas/*.json
@@ -112,36 +105,12 @@ allowlist:
     match: git@gitlab.example.invalid
     justification: Fabricated non-GitHub SSH URL in hermetic probe tests; gitlab.example.invalid is an RFC 2606 reserved name and identifies no person or real host.
 
-  - id: repo-boundary-check-github-ssh-transport
-    path_glob: .agents/scripts/repo_boundary_check.py
-    categories: [email]
-    match_regex: ^git@github\.com$
-    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
-
-  - id: repo-boundary-tests-github-ssh-transport
-    path_glob: .agents/tests/test_repo_boundary_check.py
-    categories: [email]
-    match_regex: ^git@github\.com$
-    justification: Fixed GitHub SSH transport syntax shared by every GitHub user; not a personal address.
-
   # ------------------------------------------ result-envelope test fixtures
   - id: result-envelope-test-torch-npu-dev-date
     path_glob: .agents/tests/test_result_envelope.py
     categories: [internal-identifier]
     match: dev20260801
     justification: Deterministic torch_npu development-version date suffix in the accepted envelope test fixture; it is a date, not a person's identifier.
-
-  - id: result-envelope-test-example-home
-    path_glob: .agents/tests/test_result_envelope.py
-    categories: [absolute-user-path]
-    match: /home/example-user
-    justification: Synthetic username in the accepted envelope redaction input and the assertion that the home was removed; both occurrences are required test evidence.
-
-  - id: result-envelope-test-hf-token-literal
-    path_glob: .agents/tests/test_result_envelope.py
-    categories: [secret-key]
-    match: '"hf_realsecretvaluegoeshere"'
-    justification: Fixed natural-language synthetic token under HF_TOKEN in the accepted envelope redaction test; it authenticates nothing and exists to prove secret-key replacement.
 
   # ------------------------------------------------------------- credentials
   - id: run-manifest-test-redaction-value
@@ -150,32 +119,7 @@ allowlist:
     match: '"do-not-store"'
     justification: Literal used by a test that asserts secret-shaped fields are rejected; the value is the assertion, not a credential.
 
-  # --------------------------------- knowledge Phase B fixture/version
 
-
-  - id: knowledge-redaction-test-hf-token
-    path_glob: .agents/tests/test_knowledge_redaction.py
-    categories: [secret-value]
-    match_regex: ^hf_abcdefghijklmnopqrstuvwxyz012345$
-    justification: Fixed synthetic Hugging Face-shaped token used as a knowledge-redaction negative-test input; it authenticates nothing.
-
-  - id: knowledge-redaction-test-private-address
-    path_glob: .agents/tests/test_knowledge_redaction.py
-    categories: [ipv4]
-    match_regex: ^10\.198\.51\.100$
-    justification: Fixed synthetic private IPv4 used as a knowledge-redaction negative-test input; not a project fleet address.
-
-  - id: knowledge-redaction-test-example-home
-    path_glob: .agents/tests/test_knowledge_redaction.py
-    categories: [absolute-user-path]
-    match_regex: ^/home/testuser$
-    justification: Fixed synthetic home-root used as a knowledge-redaction negative-test input; the allowance is the exact /home/testuser root in that test module, not a longer path.
-
-  - id: knowledge-redaction-test-example-emails
-    path_glob: .agents/tests/test_knowledge_redaction.py
-    categories: [email]
-    match_regex: '^(?:dev@corp-mail\.invalid|synthetic-reviewer@github\.com)$'
-    justification: Fixed synthetic negative-test mailbox addresses used to prove knowledge redaction; they authenticate nothing and name no real person.
 
 scoped_exclusions:
   # Whole-file exclusions. Use these only for the guard's own test corpus:

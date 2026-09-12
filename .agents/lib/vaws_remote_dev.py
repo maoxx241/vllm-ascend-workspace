@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from dataclasses import fields, replace
 from pathlib import Path
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
@@ -20,13 +21,12 @@ LIB = ROOT / ".agents" / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from vaws_dependency import REMEDY, USABLE_STATES, inspect  # noqa: E402
+from vaws_dependency import REMEDY, inspect  # noqa: E402
 
 PACKAGE = "vaws-remote-dev"
 STATE_DIRNAME = "remote-dev-state"
 LOCAL_STATE_DIRNAME = ".vaws-local"
 SSH_MUX_DIR = "~/.ssh/vaws-mux"
-REQUIRED_TRANSPORT_VERSION = "0.4.0"
 
 DEFAULT_ENV = {
     "REMOTE_DEV_SSH_MUX_DIR": SSH_MUX_DIR,
@@ -64,6 +64,7 @@ def substrate_environment(base: Mapping[str, str] | None = None, *, repo_root: P
 def apply_consumer_environment(repo_root: Path = ROOT) -> dict[str, str]:
     """Install scaffold remote-dev env into ``os.environ`` for in-process calls."""
     env = substrate_environment(repo_root=repo_root)
+    os.environ.pop("REMOTE_DEV_RESOLVERS", None)
     for key, value in env.items():
         if key.startswith("REMOTE_DEV_"):
             os.environ[key] = value
@@ -88,22 +89,12 @@ def package_status(env: Mapping[str, str] | None = None, *, repo_root: Path = RO
     }
 
 
-def require_package(repo_root: Path = ROOT) -> dict[str, Any]:
-    info = inspect(PACKAGE, repo_root=repo_root)
-    if info["state"] not in USABLE_STATES:
-        raise RemoteDevUnavailable(
-            f"{PACKAGE} is {info['state']}; install it with `{REMEDY}`"
-        )
-    return info
-
-
 def require_transport(repo_root: Path = ROOT):
-    """Import v0.4.0 stream, forward, and interactive APIs or fail.
+    """Load the installed transport APIs; dependency drift belongs to status.
 
-    Does not catch ``ImportError`` and continue. A missing package or a
-    pre-v0.4.0 install cannot silently fall back to raw ``ssh``.
+    Python caches the imports. Ordinary remote calls do not reread pyproject
+    and uv.lock, and a missing API never falls back to a raw SSH implementation.
     """
-    require_package(repo_root=repo_root)
     apply_consumer_environment(repo_root=repo_root)
     try:
         from remote_dev.core.endpoint import Endpoint
@@ -121,15 +112,8 @@ def require_transport(repo_root: Path = ROOT):
         )
     except ImportError as exc:
         raise RemoteDevUnavailable(
-            f"{PACKAGE} is installed but missing required transport APIs ({exc}). "
-            f"Pin {PACKAGE}=={REQUIRED_TRANSPORT_VERSION} and run `{REMEDY}`."
+            f"{PACKAGE} transport APIs are unavailable ({exc}). Run `{REMEDY}`."
         ) from exc
-    if not hasattr(Endpoint, "for_long_stream"):
-        raise RemoteDevUnavailable(
-            f"{PACKAGE} is installed but Endpoint.for_long_stream is missing; "
-            f"need {REQUIRED_TRANSPORT_VERSION}+. Run `{REMEDY}` after pinning "
-            f"{PACKAGE}=={REQUIRED_TRANSPORT_VERSION}."
-        )
     return {
         "Endpoint": Endpoint,
         "RemoteExecutionError": RemoteExecutionError,
@@ -170,10 +154,10 @@ def as_endpoint(
         kwargs["cwd"] = cwd
     if identity_file:
         kwargs["identity_file"] = identity_file
-    if long_stream:
-        return Endpoint.for_long_stream(**kwargs)
     if ssh_mux is not None:
         kwargs["ssh_mux"] = ssh_mux
+    if long_stream:
+        return Endpoint.for_long_stream(**kwargs)
     return Endpoint(**kwargs)
 
 
@@ -190,17 +174,23 @@ def endpoint_from(
     api = require_transport()
     Endpoint = api["Endpoint"]
     if isinstance(endpoint, Endpoint):
+        overrides = {}
+        if connect_timeout_s is not None:
+            overrides["connect_timeout_ms"] = max(1, int(connect_timeout_s)) * 1000
+        for name, value in (("cwd", cwd), ("identity_file", identity_file), ("ssh_mux", ssh_mux)):
+            if value is not None:
+                overrides[name] = value
+        selected = replace(endpoint, **overrides)
         if long_stream:
-            return Endpoint.for_long_stream(
-                host=endpoint.host,
-                port=endpoint.port,
-                user=endpoint.user,
-                cwd=endpoint.cwd or cwd,
-                runtime_env_file=getattr(endpoint, "runtime_env_file", None),
-                identity_file=endpoint.identity_file or identity_file,
-                connect_timeout_ms=endpoint.connect_timeout_ms,
-            )
-        return endpoint
+            # Preserve endpoint routing and runtime policy while the package
+            # selects its independent stream transport. Only an explicitly
+            # requested mux override is passed to its validation.
+            values = {field.name: getattr(selected, field.name) for field in fields(selected)
+                      if field.name not in {"ssh_mux", "keepalive"}}
+            if ssh_mux is not None:
+                values["ssh_mux"] = ssh_mux
+            return Endpoint.for_long_stream(**values)
+        return selected
     return as_endpoint(
         endpoint.host,
         int(endpoint.port),
@@ -263,12 +253,18 @@ def ssh_exec(
     cmd = [*api["ssh_base_cmd"](ep), "bash", "-s"]
     if completed.timed_out:
         result = subprocess.CompletedProcess(
-            cmd, 255, completed.stdout or "", f"ssh_exec timed out after {timeout}s"
+            cmd, 255, completed.stdout or "",
+            (completed.stderr or "") + f"\nssh_exec timed out after {timeout}s"
+        )
+    elif completed.returncode is None:
+        result = subprocess.CompletedProcess(
+            cmd, 255, completed.stdout or "",
+            (completed.stderr or "") + "\nremote command ended without an exit status"
         )
     else:
         result = subprocess.CompletedProcess(
             cmd,
-            0 if completed.returncode is None else int(completed.returncode),
+            int(completed.returncode),
             completed.stdout or "",
             completed.stderr or "",
         )
@@ -302,9 +298,11 @@ def ssh_stream(
     )
     if completed.timed_out:
         raise TimeoutError(
-            f"remote command exceeded {timeout}s (no output for the wall-clock window)"
+            f"remote command exceeded its {timeout}s wall-clock limit"
         )
-    return 0 if completed.returncode is None else int(completed.returncode)
+    if completed.returncode is None:
+        raise RuntimeError("remote stream ended without an exit status")
+    return int(completed.returncode)
 
 
 def ssh_run_bytes(

@@ -37,6 +37,7 @@ By default the captured names are passed as keyword arguments. Use
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib
 import json
 import sys
@@ -114,12 +115,23 @@ def summarize_stages(input_sets: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return grouped
 
 
-def to_device(value: Any, device: str) -> Any:
+def to_device(value: Any, device: str, memo: dict[int, Any] | None = None) -> Any:
     import torch
-
+    memo = memo if memo is not None else {}
+    if id(value) in memo:
+        return memo[id(value)]
     if isinstance(value, torch.Tensor):
-        return value.to(device)
-    return value
+        result = value.to(device).clone(memory_format=torch.preserve_format)
+    elif isinstance(value, dict):
+        result = {name: to_device(item, device, memo) for name, item in value.items()}
+    elif isinstance(value, list):
+        result = [to_device(item, device, memo) for item in value]
+    elif isinstance(value, tuple):
+        result = tuple(to_device(item, device, memo) for item in value)
+    else:
+        result = copy.deepcopy(value, memo)
+    memo[id(value)] = result
+    return result
 
 
 def as_tensor_list(result: Any) -> list[tuple[str, Any]]:
@@ -234,20 +246,10 @@ def main(argv: list[str] | None = None) -> int:
 
     dropped = {name.strip() for name in args.drop.split(",") if name.strip()}
     captured = {
-        name: to_device(value, args.device)
+        name: value
         for name, value in input_sets[stage_key].items()
         if name not in dropped
     }
-
-    if args.arg_order:
-        names = [name.strip() for name in args.arg_order.split(",") if name.strip()]
-        positional = [captured[name] for name in names]
-        keywords = {
-            name: value for name, value in captured.items() if name not in set(names)
-        }
-    else:
-        positional = []
-        keywords = captured
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, str] = {}
@@ -256,6 +258,13 @@ def main(argv: list[str] | None = None) -> int:
         if not dotted:
             continue
         emit_progress("replay", role=role, target=dotted, stage=stage_key)
+        # Each implementation receives independent inputs, including tensors
+        # nested in containers. Repeated references to one tensor stay shared
+        # within that call; arbitrary storage-view aliasing needs a tailored repro.
+        inputs = to_device(captured, args.device)
+        names = [name.strip() for name in (args.arg_order or "").split(",") if name.strip()]
+        positional = [inputs[name] for name in names]
+        keywords = {name: value for name, value in inputs.items() if name not in set(names)}
         function = resolve(dotted)
         result = function(*positional, **keywords)
         path = args.out_dir / f"{role}.pt"
@@ -268,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "ok",
                 "stage": stage_key,
                 "inputs": sorted(captured),
+                "input_scope": "Independent copies of captured values and dtype. Row limits and contiguous capture may alter shape, stride and storage-view aliasing; reconstruct those semantics when relevant.",
                 "written": written,
                 "next": (
                     "dump_compare.py tensors --left "

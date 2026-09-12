@@ -11,11 +11,10 @@ Select deterministic prompts or token IDs, sampling, model and topology that exe
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py --cases cases.json --baseline baseline.json --candidate candidate.json
+uv run --no-project python .agents/skills/vllm-ascend-correctness-validation/scripts/correctness_run.py --cases cases.json --baseline baseline.json --candidate candidate.json
 ```
 
 The remote_correctness_harness.py payload captures offline runtime observations from the managed execution. Online/AISBench results use the server execution reference through aisbench_adapter.py. The comparison derives metadata from actual outputs, emits its certificate and report, and reports missing identity as inconclusive.
@@ -24,5 +23,4 @@ Route an eager-passes/graph-fails reproduction to graph-debug, a rank-dependent 
 
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 - [aisbench](references/aisbench.md)

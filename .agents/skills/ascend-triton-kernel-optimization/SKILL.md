@@ -11,19 +11,23 @@ Choose one bottleneck hypothesis per round. Consider UB live set, physical cores
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py --config optimization.json --results round-results.json
+uv run --no-project python .agents/skills/ascend-triton-kernel-optimization/scripts/triton_optimization.py --config optimization.json --results round-results.json
 ```
 
 The config contains op_name, kernel and its validation evidence, target, cases, baseline measurements and objective. Round results carry candidate measurements and validation. The report computes KEEP/DISCARD and verifies kernel lineage and case coverage.
 
 Use ascend-triton-kernel-validation when correctness is incomplete. Use profiling-analysis for whole-model performance attribution.
 
+The report aggregates supplied evidence. Imported numerical results and latency
+measurements do not by themselves prove candidate NPU execution; this remains
+unknown in the aggregate status. Keep the measured outcomes and use existing
+runner or profiler evidence in the task assessment. That report limitation adds
+no prerequisite for work already supported by valid execution evidence.
+
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 - [profiling decision tree](references/profiling-decision-tree.md)
 - [ascend techniques](references/ascend-techniques.md)

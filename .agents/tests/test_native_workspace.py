@@ -83,7 +83,7 @@ def test_submodules_deleted_files_and_binary_stage_are_preserved(tmp_path):
     assert state(source / "nested") == child_before
 
 
-def test_existing_destination_is_untouched_and_uninitialized_module_is_explicit(tmp_path):
+def test_existing_destination_is_untouched_and_missing_gitlink_is_preserved(tmp_path):
     source = repository(tmp_path / "source")
     target = tmp_path / "exists"
     target.mkdir()
@@ -92,9 +92,39 @@ def test_existing_destination_is_untouched_and_uninitialized_module_is_explicit(
         create_workspace(source, target)
     assert (target / "keep").read_text() == "keep"
     git(source, "update-index", "--add", "--cacheinfo", "160000", git(source, "rev-parse", "HEAD").decode().strip(), "missing")
-    with pytest.raises(WorkspaceCopyError, match="initialize submodule"):
-        create_workspace(source, tmp_path / "not-created")
-    assert not (tmp_path / "not-created").exists()
+    before = state(source)
+    copy = tmp_path / "copy"
+    assert create_workspace(source, copy)["state"] == "ready"
+    assert state(copy) == state(source) == before
+    assert not (copy / "missing").exists()
+    assert git(copy, "ls-files", "--stage", "missing") == git(source, "ls-files", "--stage", "missing")
+
+
+def test_nonrecursive_clone_keeps_uninitialized_gitlink_and_dirty_initialized_sibling(tmp_path):
+    child = repository(tmp_path / "child")
+    upstream = repository(tmp_path / "upstream")
+    for name in ("uninitialized", "initialized"):
+        git(upstream, "-c", "protocol.file.allow=always", "submodule", "add", str(child), name)
+    git(upstream, "commit", "-qam", "add submodules")
+    source = tmp_path / "source"
+    git(upstream, "clone", "--no-recurse-submodules", str(upstream), str(source))
+    git(source, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "initialized")
+    (source / "initialized/file.txt").write_text("staged child\n", encoding="utf-8")
+    git(source / "initialized", "add", "file.txt")
+    (source / "initialized/file.txt").write_text("working child\n", encoding="utf-8")
+    (source / "file.txt").write_text("local docs edit\n", encoding="utf-8")
+    before, child_before = state(source), state(source / "initialized")
+    index = (source / ".git/index").read_bytes()
+    target = tmp_path / "copy"
+    assert create_workspace(source, target)["state"] == "ready"
+    assert (target / "uninitialized").is_dir()
+    assert list((target / "uninitialized").iterdir()) == []
+    assert git(target, "submodule", "status", "uninitialized") == git(source, "submodule", "status", "uninitialized")
+    assert git(target, "submodule", "status", "uninitialized").startswith(b"-")
+    assert (target / "initialized/.git").is_dir()
+    assert state(target) == state(source) == before
+    assert state(target / "initialized") == state(source / "initialized") == child_before
+    assert (source / ".git/index").read_bytes() == index
 
 
 def test_copy_keeps_git_line_policy_and_deleted_intent_without_private_state(tmp_path, monkeypatch):

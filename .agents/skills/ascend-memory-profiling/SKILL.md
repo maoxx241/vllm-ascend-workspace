@@ -15,10 +15,12 @@ Run from the repository root using the platform's Python launcher. The workspace
 selects its installed platform environment automatically.
 
 ```text
-python .agents/skills/ascend-memory-profiling/scripts/mem_collect.py --help
+uv run --no-project python .agents/skills/ascend-memory-profiling/scripts/mem_collect.py --help
 ```
 
-mem_collect.py accepts the serving workload and captures evidence through the managed service. mem_analyze.py consumes the collection output. Keep collection parameters tied to the user question; scripts own lifecycle and report generation.
+mem_collect.py accepts the serving workload and captures evidence through the managed service. mem_analyze.py consumes the collection output. Keep collection parameters tied to the user question. Standalone collection embeds its local msprof wrapper in one managed serving execution, forwards the requested serving configuration, stops that execution, and exports only its recorded runtime directory. Missing CSV evidence returns an incomplete result. Attach mode reuses an execution and leaves a live service running; resume requires the same execution ID.
+
+A ready-state sample and a post-inference sample do not establish an activation peak. Report missing idle baselines as unknown, keep unassigned process-level msprof data separate from device totals, and label tensor-name sharding as an estimate.
 
 Use profiling analysis for kernel timing, bubbles and communication latency.
 

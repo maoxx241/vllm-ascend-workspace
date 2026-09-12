@@ -82,14 +82,16 @@ def service_resources(
     devices: list[int] | None = None,
     service_port: int | None = 0,
 ) -> dict[str, Any]:
-    """Build TaskClient.run resources. Devices and npu_count are mutually exclusive."""
+    """Preserve explicit resource requests for TaskClient.run validation."""
     resources: dict[str, Any] = {}
-    if devices:
+    if devices is not None:
         resources["devices"] = list(devices)
-    else:
-        resources["npu_count"] = int(npu_count or 1)
+    if npu_count is not None:
+        resources["npu_count"] = npu_count
+    elif devices is None:
+        resources["npu_count"] = 1
     if service_port is not None:
-        resources["service_port"] = int(service_port)
+        resources["service_port"] = service_port
     return resources
 
 

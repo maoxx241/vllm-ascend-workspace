@@ -23,8 +23,6 @@ from urllib.parse import unquote
 from vaws_validate import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
-PYPROJECT_PATH = ROOT / "pyproject.toml"
-LOCK_PATH = ROOT / "uv.lock"
 REMEDY = "uv run --no-project python .agents/scripts/vaws_deps.py sync"
 STATES = ("missing", "off_spec", "ready")
 USABLE_STATES = frozenset({"ready", "off_spec"})
@@ -47,15 +45,6 @@ class DependencyError(ValidationError):
     def __init__(self, message: str, *, field: str | None = None) -> None:
         super().__init__(message)
         self.field = field
-
-
-# Kept so existing ``except DependencyPinError`` sites keep working during the
-# cutover. New code should raise ``DependencyError``.
-DependencyPinError = DependencyError
-
-
-class DependencyUnavailable(RuntimeError):
-    """Raised when a required package is missing from the current interpreter."""
 
 
 def _norm_name(name: str) -> str:
@@ -197,13 +186,6 @@ def installed_spec(name: str) -> dict[str, Any] | None:
     }
 
 
-def _unknown(name: str) -> None:
-    raise DependencyError(
-        f"$.name: unknown dependency {name!r}; known: {list(KNOWN_NAMES)}",
-        field="$.name",
-    )
-
-
 def _payload(
     *,
     name: str,
@@ -325,16 +307,3 @@ def status_exit_code(states: Mapping[str, str]) -> int:
         if state != "ready":
             return 1
     return 0
-
-
-def require_package(name: str, repo_root: Path = ROOT) -> dict[str, Any]:
-    info = inspect(name, repo_root=repo_root)
-    if info["state"] == "missing":
-        raise DependencyUnavailable(
-            f"{name} is missing; install it with `{REMEDY}`"
-        )
-    return info
-
-
-def package_usable(name: str, repo_root: Path = ROOT) -> bool:
-    return inspect(name, repo_root=repo_root)["state"] in USABLE_STATES

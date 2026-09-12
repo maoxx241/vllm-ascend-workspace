@@ -378,14 +378,9 @@ class PolicyTests(unittest.TestCase):
             other_value = guard.scan_document("host 192.168.240.8", path="docs/a.md", policy=policy)
             self.assertEqual([item.allowlisted_by for item in other_value], [None])
 
-    def test_yaml_fallback_parser_matches_pyyaml(self) -> None:
-        text = POLICY_PATH.read_text(encoding="utf-8")
-        fallback = guard._parse_yaml_subset(text)
-        try:
-            import yaml
-        except ImportError:  # pragma: no cover - environment dependent
-            self.skipTest("PyYAML is not installed")
-        self.assertEqual(fallback, yaml.safe_load(text))
+    def test_malformed_yaml_is_a_policy_error(self) -> None:
+        with self.assertRaisesRegex(guard.LeakGuardError, "invalid YAML policy"):
+            guard.load_yaml_mapping("settings: [unfinished")
 
 
 class DiffModeTests(unittest.TestCase):
@@ -563,6 +558,39 @@ class DiffModeTests(unittest.TestCase):
 
 
 class TrackedTreeTests(unittest.TestCase):
+    def test_private_state_force_added_as_empty_or_binary_never_reaches_content_scan(self) -> None:
+        for private_root in guard.PRIVATE_STATE_ROOTS:
+            with self.subTest(root=private_root), tempfile.TemporaryDirectory() as temporary:
+                repo = Path(temporary)
+                init_repo(repo)
+                (repo / "README.md").write_text("public\n", encoding="utf-8")
+                (repo / ".gitignore").write_text(private_root + "/\n", encoding="utf-8")
+                git(repo, "add", "README.md", ".gitignore")
+                git(repo, "commit", "-qm", "base")
+                for name, data in (("empty.json", b""), ("private-name.bin", b"\0private-content-marker")):
+                    path = repo / private_root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                git(repo, "add", "-f", private_root)
+                for read in (lambda: guard.tracked_files(repo), lambda: guard.staged_diff(repo)):
+                    with self.assertRaisesRegex(guard.LeakGuardError, "private runtime state") as raised:
+                        read()
+                    self.assertNotIn("private-name", str(raised.exception))
+                    self.assertNotIn("private-content-marker", str(raised.exception))
+                git(repo, "commit", "-qm", "fixture private state")
+                with self.assertRaisesRegex(guard.LeakGuardError, "private runtime state"):
+                    guard.range_diff(repo, "HEAD~1..HEAD")
+                git(repo, "rm", "-r", private_root)
+                self.assertEqual(guard.staged_diff(repo), "")
+
+    def test_private_paths_are_rejected_before_exclusions_or_file_reads(self) -> None:
+        policy = guard.default_policy()
+        policy.excluded_path_globs += ("**",)
+        for path in (".vaws-local/report.json", ".VAWS-LOCAL/report.json", "docs/../.vaws-local/report.json", ".vaws-runtime/report.json"):
+            with self.subTest(path=path), mock.patch.object(Path, "read_bytes", side_effect=AssertionError("private content read")):
+                with self.assertRaisesRegex(guard.LeakGuardError, "private runtime state"):
+                    guard.scan_files(ROOT, [path], policy)
+
     def test_submodule_gitlinks_are_not_listed(self) -> None:
         paths = guard.tracked_files(ROOT)
         self.assertTrue(paths)
@@ -1155,27 +1183,6 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
         self.assertNotIn("/home/cache", self.policy.allowed_path_prefixes)
         self.assertNotIn("/home/shared", self.policy.allowed_path_prefixes)
 
-    def test_shared_root_literals_are_allowed_only_in_the_owning_source(self) -> None:
-        envelope = self._scan(self.SHARED_ROOTS, self.ENVELOPE_SRC)
-        feedback = self._scan(self.SHARED_ROOTS, self.FEEDBACK_DOC)
-        elsewhere = self._scan(self.SHARED_ROOTS, self.OTHER_SRC)
-        self.assertEqual(
-            [item.allowlisted_by for item in envelope],
-            ["result-envelope-safe-home-prefixes"] * 4,
-        )
-        self.assertEqual(
-            [item.allowlisted_by for item in feedback],
-            [None] * 4,
-        )
-        self.assertEqual(
-            [(item.category, item.match, item.allowlisted_by) for item in elsewhere],
-            [
-                ("absolute-user-path", "/home/models", None),
-                ("absolute-user-path", "/home/data", None),
-                ("absolute-user-path", "/home/cache", None),
-                ("absolute-user-path", "/home/shared", None),
-            ],
-        )
 
     def test_different_or_longer_homes_remain_findings_in_allowed_source_and_doc(self) -> None:
         longer = "/home/models-extra /home/shared-extra /home/q12345678\n"
@@ -1191,214 +1198,28 @@ class CurrentMainFindingScopeTests(unittest.TestCase):
                     ],
                 )
 
-    def test_envelope_test_fixtures_are_allowed_only_for_exact_path_category_value(self) -> None:
-        version = self._scan(self.VERSION_LINE, self.ENVELOPE_TEST)
-        home = self._scan(self.HOME_LINE, self.ENVELOPE_TEST)
-        token = self._scan(self.TOKEN_LINE, self.ENVELOPE_TEST)
-        self.assertEqual(
-            [(item.category, item.match, item.allowlisted_by) for item in version],
-            [("internal-identifier", "dev20260801", "result-envelope-test-torch-npu-dev-date")],
-        )
-        self.assertEqual(
-            [(item.category, item.match, item.allowlisted_by) for item in home],
-            [("absolute-user-path", "/home/example-user", "result-envelope-test-example-home")],
-        )
-        self.assertEqual(
-            [(item.category, item.match, item.allowlisted_by) for item in token],
-            [
-                (
-                    "secret-key",
-                    '"hf_realsecretvaluegoeshere"',
-                    "result-envelope-test-hf-token-literal",
-                )
-            ],
-        )
 
-        self.assertEqual(
-            self._unallowlisted(self._scan(self.VERSION_LINE, self.OTHER_SRC)),
-            ["internal-identifier:dev20260801"],
-        )
-        self.assertEqual(
-            self._unallowlisted(self._scan(self.HOME_LINE, self.OTHER_SRC)),
-            ["absolute-user-path:/home/example-user"],
-        )
-        self.assertEqual(
-            self._unallowlisted(self._scan(self.TOKEN_LINE, self.OTHER_SRC)),
-            ['secret-key:"hf_realsecretvaluegoeshere"'],
-        )
-
-        self.assertEqual(
-            self._unallowlisted(self._scan('torch_npu="2.7.1.dev20260802"', self.ENVELOPE_TEST)),
-            ["internal-identifier:dev20260802"],
-        )
-        self.assertEqual(
-            self._unallowlisted(self._scan("/home/example-user-extra/work/run.py", self.ENVELOPE_TEST)),
-            ["absolute-user-path:/home/example-user-extra"],
-        )
-        self.assertEqual(
-            self._unallowlisted(
-                self._scan(
-                    'extensions={"env": {"HF_TOKEN": "hf_othersecretvaluegoeshere"}}',
-                    self.ENVELOPE_TEST,
-                )
-            ),
-            ['secret-key:"hf_othersecretvaluegoeshere"'],
-        )
-        self.assertEqual(
-            self._unallowlisted(self._scan(self.OTHER_IPV4, self.ENVELOPE_TEST)),
-            ["ipv4:" + SYNTHETIC_IPV4],
-        )
-
-    def test_github_ssh_transport_is_allowed_only_on_the_exact_files(self) -> None:
-        value = "git@github.com"
-        cases = (
-            (
-                ".agents/scripts/repo_boundary_check.py",
-                "repo-boundary-check-github-ssh-transport",
-            ),
-            (
-                ".agents/tests/test_repo_boundary_check.py",
-                "repo-boundary-tests-github-ssh-transport",
-            ),
-        )
-        for path, entry_id in cases:
-            with self.subTest(path=path):
-                findings = self._scan(value, path)
-                self.assertEqual(
-                    [(item.category, item.match, item.allowlisted_by) for item in findings],
-                    [("email", value, entry_id)],
-                )
-                self.assertEqual(
-                    self._unallowlisted(self._scan(value, self.OTHER_SRC)),
-                    ["email:" + value],
-                )
-                # The uvx-based monitor tests no longer name the SSH transport.
-                self.assertEqual(
-                    self._unallowlisted(
-                        self._scan(value, ".agents/skills/npu-fleet-monitor/tests/test_manage_monitor.py")
-                    ),
-                    ["email:" + value],
-                )
-                self.assertEqual(
-                    self._unallowlisted(self._scan("user@github.com", path)),
-                    ["email:user@github.com"],
-                )
-                self.assertEqual(
-                    self._unallowlisted(self._scan("git@gitlab.com", path)),
-                    ["email:git@gitlab.com"],
-                )
-                self.assertEqual(
-                    self._unallowlisted(self._scan(self.OTHER_IPV4, path)),
-                    ["ipv4:" + SYNTHETIC_IPV4],
-                )
+    def test_envelope_version_fixture_allows_only_the_exact_value_and_path(self) -> None:
+        findings = self._scan(self.VERSION_LINE, self.ENVELOPE_TEST)
+        self.assertEqual([(item.category, item.allowlisted_by) for item in findings],
+                         [("internal-identifier", "result-envelope-test-torch-npu-dev-date")])
+        for text, path in ((self.VERSION_LINE, self.OTHER_SRC),
+                           ('torch_npu="2.7.1.dev20260802"', self.ENVELOPE_TEST),
+                           (self.HOME_LINE, self.ENVELOPE_TEST),
+                           (self.TOKEN_LINE, self.ENVELOPE_TEST)):
+            with self.subTest(path=path, text=text):
+                self.assertTrue(self._unallowlisted(self._scan(text, path)))
 
 
-class PhaseBKnowledgeFixtureScopeTests(unittest.TestCase):
-    """Phase B fixture/version allowances suppress only their path/category/value."""
-
-    OTHER_SRC = ".agents/lib/vaws_local_state.py"
-    UNRELATED_LINE = 'token = "still-a-credential-shaped-value"'
-    CASES = (
-        {
-            "id": "lockfile-brotlicffi-version",
-            "path": "uv.lock",
-            "category": "ipv4",
-            "regex": r"^1\.2\.0\.2$",
-            "values": ("1.2.0.2",),
-            "nearby": ("1.2.0.3",),
-        },
-        {
-            "id": "knowledge-redaction-test-private-address",
-            "path": ".agents/tests/test_knowledge_redaction.py",
-            "category": "ipv4",
-            "regex": r"^10\.198\.51\.100$",
-            "values": ("10.198.51.100",),
-            "nearby": ("10.198.51.101",),
-        },
-        {
-            "id": "knowledge-redaction-test-example-home",
-            "path": ".agents/tests/test_knowledge_redaction.py",
-            "category": "absolute-user-path",
-            "regex": r"^/home/testuser$",
-            "values": ("/home/testuser",),
-            "texts": ("/home/testuser/vllm-ascend", "/home/testuser/notes"),
-            "nearby": ("/home/testuser-extra/notes",),
-        },
-        {
-            "id": "knowledge-redaction-test-example-emails",
-            "path": ".agents/tests/test_knowledge_redaction.py",
-            "category": "email",
-            "regex": r"^(?:dev@corp-mail\.invalid|synthetic-reviewer@github\.com)$",
-            "values": ("dev@corp-mail.invalid", "synthetic-reviewer@github.com"),
-            "nearby": (
-                "other@corp-mail.invalid",
-                "dev@corp-mail.example",
-                "synthetic-reviewer@github.company",
-            ),
-        },
-    )
-
-    def setUp(self) -> None:
-        self.policy = guard.load_policy(POLICY_PATH)
-        self.by_id = {entry.id: entry for entry in self.policy.entries}
-
-    def _scan(self, text: str, path: str) -> list[guard.Finding]:
-        return guard.scan_document(text, path=path, policy=self.policy)
-
-    def _category_findings(self, text: str, path: str, category: str) -> list[guard.Finding]:
-        return [item for item in self._scan(text, path) if item.category == category]
-
-    def test_declarations_are_exact_paths_and_singleton_categories(self) -> None:
-        self.assertEqual(len(self.policy.entries), 18)
-        self.assertNotIn("knowledge-failure-signatures-private-range", self.by_id)
-        for case in self.CASES:
-            with self.subTest(entry=case["id"]):
-                entry = self.by_id[case["id"]]
-                self.assertEqual(entry.path_glob, case["path"])
-                self.assertNotIn("*", entry.path_glob)
-                self.assertNotIn("?", entry.path_glob)
-                self.assertEqual(entry.categories, (case["category"],))
-                self.assertIsNotNone(entry.pattern)
-                self.assertEqual(entry.pattern.pattern, case["regex"])
-                self.assertEqual(self.policy.scoped_categories(case["path"]), ())
-
-    def test_intended_values_are_labeled_only_at_the_declared_path(self) -> None:
-        for case in self.CASES:
-            texts = case.get("texts", case["values"])
-            expected_matches = case["values"]
-            if len(expected_matches) == 1 and len(texts) > 1:
-                pairs = [(text, expected_matches[0]) for text in texts]
-            else:
-                pairs = list(zip(texts, expected_matches, strict=True))
-            for text, value in pairs:
-                with self.subTest(entry=case["id"], value=value, text=text):
-                    intended = self._category_findings(text, case["path"], case["category"])
-                    self.assertEqual(
-                        [(item.match, item.allowlisted_by) for item in intended],
-                        [(value, case["id"])],
-                    )
-                    elsewhere = self._category_findings(text, self.OTHER_SRC, case["category"])
-                    self.assertTrue(elsewhere)
-                    self.assertTrue(all(item.allowlisted_by is None for item in elsewhere))
-                    near_path = self._category_findings(text, case["path"] + "x", case["category"])
-                    self.assertTrue(near_path)
-                    self.assertTrue(all(item.allowlisted_by is None for item in near_path))
-
-    def test_nearby_values_and_unrelated_categories_remain_findings(self) -> None:
-        for case in self.CASES:
-            for nearby in case["nearby"]:
-                with self.subTest(entry=case["id"], nearby=nearby):
-                    findings = self._category_findings(nearby, case["path"], case["category"])
-                    self.assertTrue(findings)
-                    self.assertTrue(all(item.allowlisted_by is None for item in findings))
-            with self.subTest(entry=case["id"], unrelated="secret-key"):
-                unrelated = [
-                    item
-                    for item in self._scan(self.UNRELATED_LINE, case["path"])
-                    if item.category == "secret-key"
-                ]
-                self.assertTrue(unrelated)
-                self.assertTrue(all(item.allowlisted_by is None for item in unrelated))
+class LockfileVersionAllowanceTests(unittest.TestCase):
+    def test_package_version_allowance_cannot_hide_an_address_elsewhere(self) -> None:
+        policy = guard.load_policy(POLICY_PATH)
+        findings = guard.scan_document("1.2.0.2", path="uv.lock", policy=policy)
+        self.assertEqual([item.allowlisted_by for item in findings], ["lockfile-brotlicffi-version"])
+        for value, path in (("1.2.0.3", "uv.lock"), ("1.2.0.2", "report.md")):
+            findings = guard.scan_document(value, path=path, policy=policy)
+            self.assertTrue(findings)
+            self.assertTrue(all(item.allowlisted_by is None for item in findings))
 
 
 if __name__ == "__main__":

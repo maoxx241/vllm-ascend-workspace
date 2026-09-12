@@ -110,14 +110,19 @@ def managed_invocation(entry_file: str, receipt: dict, *, local_options: Sequenc
         raise ManagedEntryError("Python has no script or module entry")
     arguments = local_arguments(values[index:], local_options)
     env = dict(os.environ if environment is None else environment)
-    forwarded = {key: managed_path(value, windows=True) for key, value in env.items()
-                 if key in PATH_ENV and value}
+    # WSL can restore variables from its Windows parent when they are absent
+    # here. Explicit empty /w entries preserve the caller's missing identity.
+    forwarded = {key: managed_path(env[key], windows=True) if env.get(key) else ""
+                 for key in PATH_ENV}
+    forwarded.update({key: env.get(key, "") for key in IDENTITY_ENV})
     forwarded.update({key: value for key, value in env.items()
-                      if key in IDENTITY_ENV or key.startswith("REMOTE_DEV_") and key not in PATH_ENV})
+                      if key.startswith("REMOTE_DEV_") and key not in PATH_ENV})
     forwarded[PIN_ENV] = receipt["receipt"]
     forwarded[MANAGED_PIN_ENV] = receipt["receipt"]
     if env.get("WSLENV"):
-        forwarded["WSLENV"] = env["WSLENV"]
+        fixed = PATH_ENV | IDENTITY_ENV | {PIN_ENV, MANAGED_PIN_ENV}
+        forwarded["WSLENV"] = ":".join(part for part in env["WSLENV"].split(":")
+                                       if part and part.split("/", 1)[0] not in fixed)
     env.update(windows_interop_env(forwarded))
     for key in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "VAWS_VENV_REEXEC"):
         env.pop(key, None)

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Statically reject missing Triton launches and PyTorch computation fallback."""
+"""Advisory source lint for the ModelNew.forward Triton wrapper convention.
+
+This scan cannot prove runtime reachability and does not cover arbitrary
+function wrappers, aliases or imported launchers. Review its findings alongside
+actual candidate execution; they are not a report-generation gate.
+"""
 
 from __future__ import annotations
 
@@ -61,7 +66,7 @@ def _call_target(node: ast.Call) -> str | None:
     return name.split(".")[-1] if name else None
 
 
-def analyze_tree(tree: ast.Module) -> dict[str, Any]:
+def lint_tree(tree: ast.Module) -> dict[str, Any]:
     kernels = {
         node.name
         for node in tree.body
@@ -104,21 +109,20 @@ def analyze_tree(tree: ast.Module) -> dict[str, Any]:
 
     if forward is not None:
         walk_function("forward", forward)
-    checks = {
-        "triton_kernel_exists": {"passed": bool(kernels), "kernels": sorted(kernels)},
-        "kernel_called_from_forward": {"passed": bool(kernel_calls), "called": sorted(kernel_calls)},
-        "no_pytorch_fallback": {"passed": not violations, "violations": violations},
-    }
-    valid = all(item["passed"] for item in checks.values())
-    return {"valid": valid, "checks": checks, "reachable_functions": sorted(reachable)}
+    return {"status": "inspected" if forward is not None else "out_of_scope",
+            "advisory": True, "scope": "ModelNew.forward and same-file helpers; syntactic calls only",
+            "runtime_execution": "unknown", "pytorch_fallback": "unknown",
+            "declared_kernels": sorted(kernels), "kernel_call_names": sorted(kernel_calls),
+            "potential_compute_calls": violations, "inspected_functions": sorted(reachable)}
 
 
-def analyze_file(path: Path) -> dict[str, Any]:
+def lint_file(path: Path) -> dict[str, Any]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError) as exc:
-        return {"valid": False, "error": f"{type(exc).__name__}: {exc}", "checks": {}}
-    return analyze_tree(tree)
+        return {"status": "unreadable", "advisory": True, "runtime_execution": "unknown",
+                "pytorch_fallback": "unknown", "error": f"{type(exc).__name__}: {exc}"}
+    return lint_tree(tree)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,9 +130,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    result = analyze_file(args.path)
+    result = lint_file(args.path)
     print(json.dumps(result, ensure_ascii=False, indent=2 if args.json else None))
-    return 0 if result["valid"] else 1
+    return 2 if result["status"] == "unreadable" else 0
 
 
 if __name__ == "__main__":

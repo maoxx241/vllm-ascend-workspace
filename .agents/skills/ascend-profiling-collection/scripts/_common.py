@@ -5,8 +5,7 @@ This module owns helpers that exist *because of profiling*: the SSH +
 ascend-env preamble, the local SSH tunnel for sending workload requests, the
 profile-control client, and progress / state-dir conventions.
 
-Inventory resolution and SSH primitives are reused from the serving skill's
-``_common`` so we do not maintain a second copy.
+Execution target decoding is reused from serving; remote-dev owns SSH primitives.
 """
 
 from __future__ import annotations
@@ -79,6 +78,8 @@ class ExecutionTarget:
     cwd: str | None = None
     session_id: str | None = None
     session_file: str | None = None
+    service_port: int | None = None
+    launch_preamble: str = ""
 
 
 def resolve_execution_target(*, context_file=None, execution_id=None, host=None, port=None, user="root", service="vllm"):
@@ -105,6 +106,8 @@ def resolve_execution_target(*, context_file=None, execution_id=None, host=None,
         python=target.get("python"),
         cwd=cwd,
         session_id=task_id_of(client),
+        service_port=target.get("service_port"),
+        launch_preamble=str(target.get("launch_preamble") or ""),
     )
 
 
@@ -188,7 +191,7 @@ def call_json_command(cmd: list[str], *, cwd: Path | None = None) -> dict[str, A
     """Run ``cmd`` and parse its stdout as JSON.
 
     Stderr is always relayed so the agent sees progress markers from the
-    underlying serving / parity scripts. Raises RuntimeError on non-zero exit
+    underlying serving scripts. Raises RuntimeError on non-zero exit
     or non-JSON output, with both streams attached.
     """
     proc = subprocess.Popen(

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vllm-ascend-workspace.local/schemas/result-envelope-v1.schema.json",
   "title": "vLLM Ascend Workspace Result Envelope v1",
-  "description": "Uniform result envelope returned on stdout by every workspace entry point, in success and in failure. jsonschema is not guaranteed to be installed on a client machine, so .agents/lib/vaws_result_envelope.py is the authoritative validator and enforces the cross-field rules this document can only partially express.",
+  "description": "Detailed retained result for workspace commands that use the result-envelope library. Their stdout presentation may be compact. .agents/lib/vaws_result_envelope.py validates the cross-field rules that this schema only partially expresses; native shell, Git and direct package calls retain their own output contracts.",
   "type": "object",
   "additionalProperties": false,
   "required": [

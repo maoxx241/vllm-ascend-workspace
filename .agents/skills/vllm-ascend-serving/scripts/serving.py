@@ -13,7 +13,7 @@ from vaws_venv import ensure_workspace_interpreter
 
 if __name__ == "__main__":
     from vaws_managed_entry import ensure_managed_entry
-    ensure_managed_entry(repo_root=ROOT, entry_file=__file__)
+    ensure_managed_entry(repo_root=ROOT, entry_file=__file__, local_options=("--wrap-script-local",))
 
 ensure_workspace_interpreter(repo_root=ROOT)
 

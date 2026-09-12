@@ -243,6 +243,43 @@ class ConvertCrossProductTests(unittest.TestCase):
 
 
 class SkillPayloadConversionTests(unittest.TestCase):
+    def test_successful_remote_call_cannot_erase_business_failure_or_cancellation(self) -> None:
+        from vaws_result_envelope import envelope_from_skill_payload
+
+        for status, expected in (("failed", "failure"), ("blocked", "blocked"), ("cancelled", "cancelled")):
+            with self.subTest(status=status):
+                envelope = envelope_from_skill_payload(
+                    {"status": status, "error": "business result did not pass", "remote_dev_result": _remote_result("success")},
+                    skill="validation", entry_point="validate.py", argv=["validate.py"],
+                )
+                validate_envelope(envelope)
+                self.assertEqual(envelope["outcome"], expected)
+                self.assertNotEqual(envelope["exit_code"], 0)
+                self.assertEqual(envelope["parts"][0]["outcome"], "success")
+                if expected != "cancelled":
+                    self.assertEqual(envelope["failure"]["message"], "business result did not pass")
+
+    def test_failed_remote_call_downgrades_business_success(self) -> None:
+        from vaws_result_envelope import envelope_from_skill_payload
+
+        envelope = envelope_from_skill_payload(
+            {"status": "ok", "remote_dev_result": _remote_result("failed")},
+            skill="validation", entry_point="validate.py", argv=["validate.py"],
+        )
+        self.assertEqual(envelope["outcome"], "failure")
+        self.assertEqual(envelope["failure"]["layer"], "unknown")
+        self.assertNotEqual(envelope["exit_code"], 0)
+
+    def test_timeout_without_evidence_is_not_assigned_to_transport(self) -> None:
+        from vaws_result_envelope import envelope_from_skill_payload
+
+        envelope = envelope_from_skill_payload(
+            {"status": "timeout", "error": "operation deadline exceeded"},
+            skill="validation", entry_point="validate.py", argv=["validate.py"],
+        )
+        self.assertEqual(envelope["failure"]["layer"], "unknown")
+        self.assertEqual(envelope["failure"]["confidence"], "low")
+
     def test_embedded_remote_dev_result_becomes_a_part(self) -> None:
         from vaws_result_envelope import envelope_from_skill_payload
 

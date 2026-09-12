@@ -11,11 +11,10 @@ Keep dtype, shape, physical layout, strides and eager/compile/graph mode explici
 
 ## Agent entry
 
-Run from the repository root using the platform's Python launcher. The workspace
-selects its installed platform environment automatically.
+Run from the repository root. The entry reuses the installed platform environment.
 
 ```text
-python .agents/skills/ascend-operator-debug/scripts/operator_debug.py --config operator.json --results case-results.json
+uv run --no-project python .agents/skills/ascend-operator-debug/scripts/operator_debug.py --config operator.json --results case-results.json
 ```
 
 The config contains operator identity, tolerance and cases. Result files contain observed case metrics or failures. The report computes coverage and classification; absent cases remain inconclusive.
@@ -24,6 +23,5 @@ Use ascend-tensor-dump while the first divergent stage is unknown. Use the Trito
 
 Read the relevant detail only when needed:
 
-- [behavior](references/behavior.md)
 
 - [Business input example](references/inputs.md)
