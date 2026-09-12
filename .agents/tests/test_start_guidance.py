@@ -59,7 +59,7 @@ def test_claude_imports_agents_without_replacing_custom_instructions(tmp_path):
 
 def test_claude_existing_agents_import_does_not_get_another_block(tmp_path):
     claude = tmp_path / "CLAUDE.md"
-    original = "# Custom\n@AGENTS.md\nKeep this text.\n"
+    original = "\n".join(("# Custom", "@AGENTS.md", "Keep this text.", ""))
     claude.write_text(original)
     files, _ = plan(tmp_path, "claude")
     assert claude not in files
@@ -119,7 +119,7 @@ def test_malformed_markers_are_rejected(original):
 
 @pytest.mark.parametrize("client,relative,body", [
     ("kimi", "AGENTS.md", BEGIN + "\nUnfinished instructions.\n"),
-    ("claude", "CLAUDE.md", BEGIN + "\n@AGENTS.md\n"),
+    ("claude", "CLAUDE.md", "\n".join((BEGIN, "@AGENTS.md", ""))),
     ("cursor", ".cursor/rules/vaws-session-start.mdc", BEGIN + "\nUnfinished rule.\n"),
 ])
 def test_malformed_existing_projection_does_not_get_silently_replaced(tmp_path, client, relative, body):
