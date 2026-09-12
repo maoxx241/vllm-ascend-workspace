@@ -34,7 +34,7 @@ an invented observation. A model path alone does not prove weight-file contents.
 | `correctness_run.py` | Cases and baseline/candidate outputs | Terminal inconclusive report with raw outputs retained |
 | `performance_regression.py` | Business experiment or existing measurements | Terminal inconclusive report; no regression verdict |
 | `graph_debug_case.py` | Eager/graph snapshots and observed sidecars | Inconclusive snapshot comparison |
-| `change_validation.py` | Diff and existing validation manifests | Missing coverage remains visible; scope and code identities must match |
+| `change_validation.py` | Diff and existing validation manifests | Retains reported outcomes, missing artifacts, certificate reasons and observed source scope; the Agent assesses coverage |
 
 Performance experiments that bind baseline and candidate source worktrees derive
 their intended code and compiled-artifact variables from the recorded identities.
