@@ -4240,7 +4240,7 @@ wheels = [
 [[package]]
 name = "vaws-coordinator"
 version = "0.4.0"
-source = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?rev=c502d39d8db1d272195470c6855060e03a6a2e31#c502d39d8db1d272195470c6855060e03a6a2e31" }
+source = { git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?rev=a2f83f7efb320597729ec21023bac4c6184b8199#a2f83f7efb320597729ec21023bac4c6184b8199" }
 dependencies = [
     { name = "setuptools-scm" },
     { name = "vaws-remote-dev" },
@@ -4284,7 +4284,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pillow", specifier = ">=11" },
-    { name = "vaws-coordinator", git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?rev=c502d39d8db1d272195470c6855060e03a6a2e31" },
+    { name = "vaws-coordinator", git = "https://github.com/vllm-ascend-workspace/vaws-coordinator?rev=a2f83f7efb320597729ec21023bac4c6184b8199" },
     { name = "vaws-knowledge", git = "https://github.com/vllm-ascend-workspace/vaws-knowledge?rev=c95293836a3b595c13a80189197d44a2980c9fbd" },
     { name = "vaws-remote-dev", git = "https://github.com/vllm-ascend-workspace/remote-dev?rev=64a29a705e4969ed235dc67db453e7e15fa23446" },
 ]
